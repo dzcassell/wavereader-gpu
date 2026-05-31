@@ -42,9 +42,11 @@ def _load():
 def _clip(path: str, start: float, end: float) -> str:
     fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="wr_emb_")
     os.close(fd)
+    af = (["-af", config.SPK_PREPROCESS_FILTERS]
+          if config.SPK_PREPROCESS and config.SPK_PREPROCESS_FILTERS else [])
     cmd = ["ffmpeg", "-nostdin", "-y", "-i", path,
            "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
-           "-ac", "1", "-ar", "16000", tmp]
+           "-ac", "1", "-ar", "16000", *af, tmp]
     subprocess.run(cmd, capture_output=True, check=True, timeout=120)
     return tmp
 
@@ -82,11 +84,18 @@ def centroid(embeddings: list[np.ndarray]) -> np.ndarray:
     return (m / norm if norm > 0 else m).astype("float32")
 
 
-def identify(emb: np.ndarray, profiles: list[dict]) -> tuple:
-    """Return (best_speaker_id, score) over profiles [{id, emb}], or (None, 0.0)."""
-    best_id, best = None, -1.0
-    for p in profiles:
-        sc = cosine(emb, p["emb"])
-        if sc > best:
-            best, best_id = sc, p["id"]
-    return best_id, max(0.0, best)
+def identify(emb: np.ndarray, speakers: list[dict], topk: int = 3) -> list[dict]:
+    """Rank speakers for one voiceprint using kNN: the mean of each speaker's top-K
+    most-similar enrolled prints. speakers = [{id, name, embs(np [N,dim])}].
+    Returns [{id, name, score}] sorted best-first (empty if no speakers)."""
+    ranked = []
+    for sp in speakers:
+        embs = sp["embs"]
+        if embs is None or len(embs) == 0:
+            continue
+        sims = embs @ emb                       # cosine (all normalized)
+        k = min(topk, sims.shape[0])
+        score = float(np.sort(sims)[-k:].mean())
+        ranked.append({"id": sp["id"], "name": sp["name"], "score": round(score, 3)})
+    ranked.sort(key=lambda x: -x["score"])
+    return ranked

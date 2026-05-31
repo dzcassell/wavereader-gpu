@@ -99,6 +99,7 @@ the GPU name) rather than silently falling back to CPU.
 | POST | `/api/speakers/{id}/profile` · `/api/profiles` | (re)build one / all speaker profiles |
 | POST | `/api/recordings/{id}/identify` | auto-tag voices in one file (`?threshold=`) |
 | POST | `/api/identify` | background scan + auto-tag across files (`?threshold=&only_new=`) |
+| POST | `/api/voiceprints/rebuild` | re-embed all voiceprints from source with the current pipeline |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
 | GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |
@@ -156,6 +157,15 @@ Then:
 It learns over time: every manual tag/correction enriches that profile, so re-running
 identify gets more accurate. The per-speaker clips are also the labeled dataset you'd
 later feed a voice-cloning / TTS model.
+
+**Accuracy details.** Voiceprint clips are **pre-cleaned** (`SPK_PREPROCESS`: band-limit
++ denoise) so enrollment and matching see the same conditioned audio. Matching is
+**kNN** — a segment is scored against the mean of each speaker's `SPK_TOPK` most-similar
+enrolled prints (more robust than a single average), and a match must also beat the
+runner-up by `SPK_MIN_MARGIN`. Auto-ID requires a longer clip than enrollment
+(`SPK_ID_MIN_SEC`), and noisy clips (very low Whisper logprob) are skipped at
+enrollment (`SPK_ENROLL_MIN_LOGPROB`). If you change the clean-audio settings, click
+**Rebuild voiceprints** so existing prints are re-embedded the same way.
 
 > Speaker-ID adds `torchaudio` + `speechbrain`; the ECAPA model (~80 MB) downloads to
 > the model-cache volume on first tag.

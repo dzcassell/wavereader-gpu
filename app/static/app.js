@@ -802,6 +802,19 @@ document.getElementById("buildProfiles").addEventListener("click", async (e) => 
   finally { e.target.disabled = false; }
 });
 
+document.getElementById("rebuildPrints").addEventListener("click", async (e) => {
+  if (!confirm("Re-embed all voiceprints from source audio with the current pipeline? Recommended after changing clean-audio settings.")) return;
+  e.target.disabled = true;
+  document.getElementById("spkInfo").textContent = "rebuilding voiceprints…";
+  try {
+    const d = await (await fetch("/api/voiceprints/rebuild", { method: "POST" })).json();
+    document.getElementById("spkInfo").textContent =
+      `rebuilt ${d.rebuilt} voiceprint(s)${d.failed ? `, ${d.failed} failed` : ""}`;
+    loadSpeakers();
+  } catch { document.getElementById("spkInfo").textContent = "rebuild failed"; }
+  finally { e.target.disabled = false; }
+});
+
 document.getElementById("scanIdentify").addEventListener("click", async (e) => {
   const onlyNew = document.getElementById("idOnlyNew").checked;
   const sep = spkThresholdParam() ? "&" : "?";

@@ -54,6 +54,21 @@ MIN_ENROLL_SEC = float(os.getenv("MIN_ENROLL_SEC", "1.5"))
 # Cosine-similarity threshold for auto-identifying a speaker (ECAPA voiceprints).
 # Higher = stricter (fewer, more-confident matches). ~0.40-0.55 is a sane range.
 SPK_THRESHOLD = float(os.getenv("SPK_THRESHOLD", "0.45"))
+# Pre-clean the audio of each voiceprint clip (band-limit + denoise) before ECAPA.
+# Must match between enrollment and identification — run "Rebuild voiceprints" after
+# changing these so existing prints are recomputed the same way.
+SPK_PREPROCESS = os.getenv("SPK_PREPROCESS", "true").lower() in ("1", "true", "yes")
+SPK_PREPROCESS_FILTERS = os.getenv("SPK_PREPROCESS_FILTERS",
+                                   "highpass=f=250,lowpass=f=3000,afftdn=nf=-20")
+# kNN matching: average the top-K most-similar enrolled prints per speaker.
+SPK_TOPK = int(os.getenv("SPK_TOPK", "3"))
+# A segment must be at least this long to *auto-identify* (stricter than enrollment).
+SPK_ID_MIN_SEC = float(os.getenv("SPK_ID_MIN_SEC", "2.0"))
+# Require best - second-best speaker score to exceed this (0 = off). Cuts confusions.
+SPK_MIN_MARGIN = float(os.getenv("SPK_MIN_MARGIN", "0.0"))
+# Skip enrolling a voiceprint from a clip whose Whisper avg_logprob is below this
+# (garbage audio -> garbage print). Set very low to effectively disable.
+SPK_ENROLL_MIN_LOGPROB = float(os.getenv("SPK_ENROLL_MIN_LOGPROB", "-1.5"))
 
 # --- Logging ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR

@@ -326,6 +326,35 @@ def voiceprint_blobs(speaker_id: int) -> list[bytes]:
     return [r["emb"] for r in rows]
 
 
+def get_speaker_prints() -> list[dict]:
+    """[{id, name, blobs:[bytes]}] grouped by speaker — for kNN identification."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT v.speaker_id AS id, s.name, v.emb "
+            "FROM voiceprints v JOIN speakers s ON s.id=v.speaker_id"
+        ).fetchall()
+    by: dict = {}
+    for r in rows:
+        d = by.setdefault(r["id"], {"id": r["id"], "name": r["name"], "blobs": []})
+        d["blobs"].append(r["emb"])
+    return list(by.values())
+
+
+def iter_voiceprints():
+    """Yield (vp_id, recording_id, seg_index, start, end, path) for re-embedding."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT v.id, v.recording_id, v.seg_index, v.start, v.end, r.path "
+            "FROM voiceprints v JOIN recordings r ON r.id=v.recording_id"
+        ).fetchall()
+    for r in rows:
+        yield r["id"], r["recording_id"], r["seg_index"], r["start"], r["end"], r["path"]
+
+
+def update_voiceprint_emb(vp_id: int, emb: bytes, dim: int) -> None:
+    _exec("UPDATE voiceprints SET emb=?, dim=? WHERE id=?", (emb, dim, vp_id))
+
+
 def set_profile(speaker_id: int, emb: bytes, dim: int, n: int) -> None:
     _exec("INSERT INTO speaker_profiles (speaker_id, dim, emb, n, updated_at) "
           "VALUES (?, ?, ?, ?, ?) "

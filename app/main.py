@@ -8,6 +8,7 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 
+import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -257,31 +258,36 @@ async def tag(rec_id: int, req: TagReq):
     can_embed = os.path.exists(path)
 
     def work():
-        enrolled, short = 0, 0
+        enrolled, short, lowq = 0, 0, 0
         for i in req.segments:
             if i < 0 or i >= len(segs):
                 continue
             s = segs[i]
             start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
-            db.set_segment_tag(rec_id, i, sid, "manual", None)
-            if can_embed and (end - start) >= config.MIN_ENROLL_SEC:
-                try:
-                    emb = voiceprint.embed(path, start, end)
-                    db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
-                    enrolled += 1
-                except Exception as e:
-                    log.warning("embed failed rec=%s seg=%s: %s", rec_id, i, e)
-            elif end - start < config.MIN_ENROLL_SEC:
-                short += 1
+            db.set_segment_tag(rec_id, i, sid, "manual", None)   # always record the tag
+            if not can_embed or (end - start) < config.MIN_ENROLL_SEC:
+                if (end - start) < config.MIN_ENROLL_SEC:
+                    short += 1
+                continue
+            lp = s.get("logprob")
+            if lp is not None and lp < config.SPK_ENROLL_MIN_LOGPROB:
+                lowq += 1                                        # too noisy for a clean print
+                continue
+            try:
+                emb = voiceprint.embed(path, start, end)
+                db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
+                enrolled += 1
+            except Exception as e:
+                log.warning("embed failed rec=%s seg=%s: %s", rec_id, i, e)
         if enrolled:
             _build_profile(sid)   # keep the speaker's profile current
-        return enrolled, short
+        return enrolled, short, lowq
 
-    enrolled, short = await asyncio.to_thread(work)
-    log.info("tagged rec=%s speaker=%s segs=%d enrolled=%d (skipped %d too-short)",
-             rec_id, name, len(req.segments), enrolled, short)
+    enrolled, short, lowq = await asyncio.to_thread(work)
+    log.info("tagged rec=%s speaker=%s segs=%d enrolled=%d (skipped %d short, %d low-quality)",
+             rec_id, name, len(req.segments), enrolled, short, lowq)
     return {"speaker_id": sid, "name": name, "tagged": len(req.segments),
-            "enrolled": enrolled, "skipped_short": short}
+            "enrolled": enrolled, "skipped_short": short, "skipped_lowq": lowq}
 
 
 @app.post("/api/recordings/{rec_id}/untag")
@@ -304,20 +310,24 @@ def _build_profile(speaker_id: int) -> int:
     return len(blobs)
 
 
-def _load_profiles() -> list[dict]:
-    return [{"id": p["id"], "name": p["name"], "emb": voiceprint.blob_to_np(p["emb"])}
-            for p in db.get_profiles()]
+def _load_speakers() -> list[dict]:
+    """Speakers with their enrolled prints stacked, for kNN identification."""
+    out = []
+    for sp in db.get_speaker_prints():
+        embs = np.vstack([voiceprint.blob_to_np(b) for b in sp["blobs"]])
+        out.append({"id": sp["id"], "name": sp["name"], "embs": embs})
+    return out
 
 
 def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
-                        profiles: list = None) -> int:
+                        speakers: list = None) -> int:
     rec = db.get_recording(rec_id)
     if not rec or not os.path.exists(rec["path"]):
         return 0
     segs = rec.get("segments") or []
-    if profiles is None:
-        profiles = _load_profiles()
-    if not profiles:
+    if speakers is None:
+        speakers = _load_speakers()
+    if not speakers:
         return 0
     tags = db.get_segment_tags(rec_id)
     n = 0
@@ -328,16 +338,20 @@ def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
         if ex and ex["source"] == "auto" and not overwrite:
             continue
         start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
-        if end - start < config.MIN_ENROLL_SEC:
+        if end - start < config.SPK_ID_MIN_SEC:   # stricter than enrollment
             continue
         try:
             emb = voiceprint.embed(rec["path"], start, end)
         except Exception as e:
             log.warning("identify embed failed rec=%s seg=%s: %s", rec_id, i, e)
             continue
-        sid, score = voiceprint.identify(emb, profiles)
-        if sid is not None and score >= threshold:
-            db.set_segment_tag(rec_id, i, sid, "auto", round(score, 3))
+        ranked = voiceprint.identify(emb, speakers, config.SPK_TOPK)
+        if not ranked:
+            continue
+        best = ranked[0]
+        margin = best["score"] - (ranked[1]["score"] if len(ranked) > 1 else 0.0)
+        if best["score"] >= threshold and margin >= config.SPK_MIN_MARGIN:
+            db.set_segment_tag(rec_id, i, best["id"], "auto", round(best["score"], 3))
             n += 1
         elif ex and ex["source"] == "auto":
             db.remove_segment_tag(rec_id, i)   # was auto, no longer confident
@@ -372,18 +386,18 @@ async def identify_all(threshold: float | None = None, only_new: bool = True):
     """Scan transcribed files and auto-tag recognized voices. Runs in the background
     (can be long); the Tags column fills in live as it progresses."""
     th = config.SPK_THRESHOLD if threshold is None else threshold
-    if not db.get_profiles():
-        raise HTTPException(400, "no speaker profiles yet — tag some voices first")
+    if not db.get_speaker_prints():
+        raise HTTPException(400, "no enrolled voices yet — tag some voices first")
 
     async def run():
         def work():
-            profiles = _load_profiles()
+            speakers = _load_speakers()
             files, tags = 0, 0
             for rid, _f, _segs, _t in db.iter_done_segments():
                 if only_new and any(t["source"] == "auto"
                                     for t in db.get_segment_tags(rid).values()):
                     continue
-                tags += _identify_recording(rid, th, True, profiles)
+                tags += _identify_recording(rid, th, True, speakers)
                 files += 1
                 if files % 25 == 0:
                     log.info("identify-all progress: %d files, %d auto-tags so far", files, tags)
@@ -394,6 +408,33 @@ async def identify_all(threshold: float | None = None, only_new: bool = True):
 
     asyncio.create_task(run())
     return {"started": True, "threshold": th, "only_new": only_new}
+
+
+@app.post("/api/voiceprints/rebuild")
+async def rebuild_voiceprints():
+    """Re-embed every stored voiceprint from its source audio with the current
+    pipeline (e.g. after changing SPK_PREPROCESS), then rebuild profiles. Keeps
+    enrollment and identification embeddings consistent."""
+    def work():
+        done, failed = 0, 0
+        for vp_id, _rid, _seg, start, end, path in db.iter_voiceprints():
+            if not path or not os.path.exists(path):
+                failed += 1
+                continue
+            try:
+                emb = voiceprint.embed(path, start, end)
+                db.update_voiceprint_emb(vp_id, emb.tobytes(), int(emb.shape[0]))
+                done += 1
+            except Exception as e:
+                failed += 1
+                log.warning("re-embed vp=%s failed: %s", vp_id, e)
+        for sp in db.list_speakers():
+            _build_profile(sp["id"])
+        return done, failed
+
+    done, failed = await asyncio.to_thread(work)
+    log.info("voiceprint rebuild: %d re-embedded, %d failed", done, failed)
+    return {"rebuilt": done, "failed": failed}
 
 
 @app.get("/api/recordings/{rec_id}")
