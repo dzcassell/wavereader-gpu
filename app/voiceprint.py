@@ -22,10 +22,27 @@ _model = None
 _lock = threading.Lock()
 
 
+def _patch_torchaudio():
+    """SpeechBrain 1.0.x calls torchaudio's legacy backend API, which the very new
+    torchaudio (cu128/Blackwell build) removed. We load audio via soundfile anyway,
+    so re-add these as harmless shims to keep SpeechBrain importing/running."""
+    try:
+        import torchaudio
+    except Exception:
+        return
+    if not hasattr(torchaudio, "list_audio_backends"):
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
+    if not hasattr(torchaudio, "get_audio_backend"):
+        torchaudio.get_audio_backend = lambda: "soundfile"
+    if not hasattr(torchaudio, "set_audio_backend"):
+        torchaudio.set_audio_backend = lambda *a, **k: None
+
+
 def _load():
     global _model
     with _lock:
         if _model is None:
+            _patch_torchaudio()
             try:
                 from speechbrain.inference.speaker import EncoderClassifier
             except ImportError:  # older speechbrain layout
