@@ -220,24 +220,39 @@ async function loadTranscript(id, el) {
   }
 
   const parts = [];
+  const hasSegments = rec.status !== "error" && rec.segments && rec.segments.length;
   if (rec.status === "error") {
     parts.push(`<div class="err-msg">Transcription error: ${escapeHtml(rec.error || "unknown")}</div>`);
-  } else if (!rec.segments || !rec.segments.length) {
+  } else if (!hasSegments) {
     parts.push(`<div class="empty">No speech detected.</div>`);
   } else {
-    const exportBtns = `
+    parts.push(`<audio class="player" controls preload="none" src="/api/recordings/${id}/audio"></audio>`);
+    parts.push(`<div class="tbar">
       <button class="btn copy">Copy text</button>
       <a class="btn" href="/api/recordings/${id}/export?fmt=txt">.txt</a>
       <a class="btn" href="/api/recordings/${id}/export?fmt=srt">.srt</a>
-      <a class="btn" href="/api/recordings/${id}/export?fmt=vtt">.vtt</a>`;
-    parts.push(`<div class="tbar">${exportBtns}</div>`);
+      <a class="btn" href="/api/recordings/${id}/export?fmt=vtt">.vtt</a>
+      <button class="btn sel-all">Select all</button>
+      <span class="muted seg-hint">tip: check segments to export a clip · click a timestamp to play</span>
+    </div>`);
     const lowCount = rec.segments.filter(isLowConf).length;
     if (lowCount) parts.push(
       `<div class="conf-note">⚠ ${lowCount} low-confidence segment${lowCount === 1 ? "" : "s"} highlighted — try re-transcribing with cleaning on, VAD off, or a larger model.</div>`);
-    parts.push(rec.segments.map(s => {
+    parts.push(`<div class="selbar" hidden>
+      <span class="selinfo"></span>
+      <button class="btn sel-play">▶ Play selection</button>
+      <button class="btn sel-wav">Export .wav</button>
+      <button class="btn sel-copy">Copy</button>
+      <button class="btn sel-txt">.txt</button>
+      <button class="btn sel-clear">Clear</button>
+    </div>`);
+    parts.push(rec.segments.map((s, i) => {
       const low = isLowConf(s);
       const tip = low ? ` title="low confidence (logprob ${s.logprob}, no-speech ${s.nsp})"` : "";
-      return `<div class="seg${low ? " lowconf" : ""}"${tip}><span class="ts">${fmtTs(s.start)}</span><span class="tx">${highlight(s.text)}</span></div>`;
+      return `<div class="seg${low ? " lowconf" : ""}" data-i="${i}" data-start="${s.start}" data-end="${s.end}"${tip}>` +
+        `<input type="checkbox" class="seg-sel">` +
+        `<span class="ts" role="button">${fmtTs(s.start)}</span>` +
+        `<span class="tx">${highlight(s.text)}</span></div>`;
     }).join(""));
   }
   parts.push(retranscribeControl(rec));
@@ -252,7 +267,117 @@ async function loadTranscript(id, el) {
       setTimeout(() => (e.target.textContent = "Copy text"), 1500);
     } catch { e.target.textContent = "Copy failed"; }
   });
+  if (hasSegments) wirePlayerAndSelection(el, id, rec);
   wireRetranscribe(el, id);
+}
+
+function wirePlayerAndSelection(el, id, rec) {
+  const player = el.querySelector(".player");
+  const segEls = [...el.querySelectorAll(".seg")];
+  const selbar = el.querySelector(".selbar");
+  const stem = (rec.filename || "clip").replace(/\.[^.]+$/, "");
+  let clipQueue = null, clipIdx = 0;   // for "Play selection"
+
+  const checked = () => segEls.filter(se => se.querySelector(".seg-sel").checked);
+  const rangesOf = (els) => els
+    .map(se => [parseFloat(se.dataset.start), parseFloat(se.dataset.end)])
+    .filter(([s, e]) => e > s)
+    .sort((a, b) => a[0] - b[0]);
+
+  function updateSelbar() {
+    const sel = checked();
+    if (!sel.length) { selbar.hidden = true; clipQueue = null; return; }
+    selbar.hidden = false;
+    const total = rangesOf(sel).reduce((a, [s, e]) => a + (e - s), 0);
+    el.querySelector(".selinfo").textContent =
+      `${sel.length} segment${sel.length === 1 ? "" : "s"} · ${total.toFixed(1)}s`;
+  }
+
+  // Click a timestamp to play from there; checkbox toggles selection.
+  segEls.forEach(se => {
+    se.querySelector(".ts").addEventListener("click", () => {
+      clipQueue = null;
+      player.currentTime = parseFloat(se.dataset.start);
+      player.play();
+    });
+    se.querySelector(".seg-sel").addEventListener("change", updateSelbar);
+  });
+
+  // Karaoke highlight + advance through a selection-play queue.
+  player.addEventListener("timeupdate", () => {
+    const t = player.currentTime;
+    for (const se of segEls) {
+      const s = parseFloat(se.dataset.start), e = parseFloat(se.dataset.end);
+      se.classList.toggle("playing", t >= s && t < e);
+    }
+    if (clipQueue) {
+      const [, end] = clipQueue[clipIdx];
+      if (t >= end - 0.03) {
+        clipIdx++;
+        if (clipIdx >= clipQueue.length) { clipQueue = null; player.pause(); }
+        else { player.currentTime = clipQueue[clipIdx][0]; }
+      }
+    }
+  });
+
+  el.querySelector(".sel-all").addEventListener("click", () => {
+    const allOn = segEls.every(se => se.querySelector(".seg-sel").checked);
+    segEls.forEach(se => (se.querySelector(".seg-sel").checked = !allOn));
+    updateSelbar();
+  });
+  el.querySelector(".sel-clear").addEventListener("click", () => {
+    segEls.forEach(se => (se.querySelector(".seg-sel").checked = false));
+    updateSelbar();
+  });
+  el.querySelector(".sel-play").addEventListener("click", () => {
+    const r = rangesOf(checked());
+    if (!r.length) return;
+    clipQueue = r; clipIdx = 0;
+    player.currentTime = r[0][0];
+    player.play();
+  });
+  el.querySelector(".sel-copy").addEventListener("click", (e) => {
+    const txt = checked().map(se => rec.segments[+se.dataset.i].text).join("\n");
+    navigator.clipboard.writeText(txt).then(() => {
+      e.target.textContent = "Copied ✓";
+      setTimeout(() => (e.target.textContent = "Copy"), 1500);
+    }).catch(() => (e.target.textContent = "Copy failed"));
+  });
+  el.querySelector(".sel-txt").addEventListener("click", () => {
+    const txt = checked().map(se => rec.segments[+se.dataset.i].text).join("\n");
+    downloadBlob(new Blob([txt], { type: "text/plain" }), `${stem}_selection.txt`);
+  });
+  el.querySelector(".sel-wav").addEventListener("click", async (e) => {
+    const r = rangesOf(checked());
+    if (!r.length) return;
+    e.target.disabled = true;
+    e.target.textContent = "Building…";
+    try {
+      const res = await fetch(`/api/recordings/${id}/clip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ranges: r }),
+      });
+      if (!res.ok) throw new Error();
+      downloadBlob(await res.blob(), `${stem}_clip.wav`);
+      e.target.textContent = "Export .wav";
+    } catch {
+      e.target.textContent = "Failed — retry";
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function isLowConf(s) {

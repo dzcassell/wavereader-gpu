@@ -3,6 +3,8 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
+import tempfile
 import time
 from contextlib import asynccontextmanager
 
@@ -10,10 +12,14 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from . import config, db, gpu, logging_setup, transcribe, worker
 
 log = logging.getLogger("wavereader.api")
+
+_AUDIO_MIME = {".wav": "audio/wav", ".flac": "audio/flac", ".mp3": "audio/mpeg",
+               ".m4a": "audio/mp4", ".ogg": "audio/ogg"}
 
 
 class RetranscribeReq(BaseModel):
@@ -25,6 +31,10 @@ class RetranscribeReq(BaseModel):
 
 class SettingsReq(BaseModel):
     recursive: bool | None = None
+
+
+class ClipReq(BaseModel):
+    ranges: list[tuple[float, float]]
 
 _GPU_STATUS = "not loaded"
 
@@ -142,6 +152,61 @@ async def download(rec_id: int):
         raise HTTPException(410, "file no longer on disk")
     return FileResponse(rec["path"], filename=rec["filename"],
                         media_type="application/octet-stream")
+
+
+@app.get("/api/recordings/{rec_id}/audio")
+async def audio(rec_id: int):
+    """Serve the audio inline (no attachment) for the in-page player. FileResponse
+    handles HTTP Range requests, so seeking works."""
+    rec = db.get_recording(rec_id)
+    if not rec:
+        raise HTTPException(404, "not found")
+    if not os.path.exists(rec["path"]):
+        raise HTTPException(410, "file no longer on disk")
+    ext = os.path.splitext(rec["filename"])[1].lower()
+    return FileResponse(rec["path"], media_type=_AUDIO_MIME.get(ext, "application/octet-stream"))
+
+
+def _build_clip(src: str, ranges: list[tuple[float, float]], out: str) -> None:
+    """Stitch the given time ranges of src into one wav via ffmpeg atrim+concat."""
+    trims, labels = [], []
+    for i, (s, e) in enumerate(ranges):
+        trims.append(f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a{i}]")
+        labels.append(f"[a{i}]")
+    fc = ";".join(trims) + ";" + "".join(labels) + f"concat=n={len(ranges)}:v=0:a=1[out]"
+    cmd = ["ffmpeg", "-nostdin", "-y", "-i", src, "-filter_complex", fc, "-map", "[out]", out]
+    subprocess.run(cmd, capture_output=True, check=True, timeout=900)
+
+
+@app.post("/api/recordings/{rec_id}/clip")
+async def clip(rec_id: int, req: ClipReq):
+    """Export a single .wav containing only the selected transcript ranges."""
+    rec = db.get_recording(rec_id)
+    if not rec:
+        raise HTTPException(404, "not found")
+    if not os.path.exists(rec["path"]):
+        raise HTTPException(410, "file no longer on disk")
+    ranges = [(max(0.0, float(s)), float(e)) for s, e in req.ranges if float(e) > float(s)]
+    if not ranges:
+        raise HTTPException(400, "no valid ranges")
+    if len(ranges) > 1000:
+        raise HTTPException(400, "too many ranges (max 1000)")
+    ranges.sort()
+    stem = os.path.splitext(rec["filename"])[0]
+    fd, out = tempfile.mkstemp(suffix=".wav", prefix="wr_clip_")
+    os.close(fd)
+    try:
+        await asyncio.to_thread(_build_clip, rec["path"], ranges, out)
+    except Exception as e:
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+        log.error("clip failed id=%s: %s", rec_id, e)
+        raise HTTPException(500, "clip extraction failed")
+    log.info("clip id=%s: %d range(s) -> %s_clip.wav", rec_id, len(ranges), stem)
+    return FileResponse(out, filename=f"{stem}_clip.wav", media_type="audio/wav",
+                        background=BackgroundTask(os.remove, out))
 
 
 def _srt_ts(seconds: float) -> str:

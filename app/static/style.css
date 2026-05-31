@@ -94,9 +94,21 @@ mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .
 .seg { display: flex; gap: .8rem; padding: .15rem 0; }
 .seg .ts { color: var(--accent); font-variant-numeric: tabular-nums; flex: 0 0 5.5rem; }
 .seg .tx { white-space: pre-wrap; }
-.seg.lowconf { border-left: 2px solid var(--warn); padding-left: .5rem; margin-left: -.7rem; }
 .seg.lowconf .tx { color: var(--warn); }
+.seg.lowconf .ts { color: var(--warn); }
+.seg.playing { background: rgba(79, 195, 247, .14); border-radius: 4px; }
+.seg .ts { cursor: pointer; }
+.seg .ts:hover { text-decoration: underline; }
+.seg .seg-sel { margin-top: .25rem; flex: 0 0 auto; cursor: pointer; }
 .conf-note { color: var(--warn); font-size: .85rem; margin-bottom: .6rem; }
+.player { width: 100%; height: 38px; margin-bottom: .6rem; }
+.seg-hint { font-size: .78rem; margin-left: auto; }
+.selbar {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: .5rem;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .4rem .6rem; margin-bottom: .6rem;
+}
+.selinfo { color: var(--text); font-size: .85rem; margin-right: auto; }
 .empty, .err-msg { color: var(--muted); padding: .5rem 0; }
 .err-msg { color: var(--err); }
 .logpanel { margin: 0 1.5rem 2rem; }

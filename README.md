@@ -90,6 +90,8 @@ the GPU name) rather than silently falling back to CPU.
 | GET | `/api/recordings` | list all recordings + status (`?q=` full-text search over filenames + transcripts) |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
+| GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |
+| POST | `/api/recordings/{id}/clip` | export one .wav of selected ranges; body `{"ranges": [[start,end], …]}` |
 | GET | `/api/recordings/{id}/export?fmt=txt\|srt\|vtt` | download transcript as plain text, SRT, or WebVTT |
 | POST | `/api/recordings/{id}/retranscribe` | re-queue a file; JSON body `{"model": "...", "engine": "..."}` optionally overrides model/engine for that run |
 | DELETE | `/api/recordings/{id}` | **delete the file from disk** and remove the record (guarded to the scan/upload dirs) |
@@ -116,6 +118,20 @@ The header has a **Free models** button that drops every cached model and releas
 VRAM in one click (the GPU chip beside it shows the memory drop). The backlog
 **progress bar** under the search box shows how much of the on-disk queue has been
 transcribed, plus what is still queued or errored.
+
+## Playback & clipping
+
+Expand a finished transcript and you get an inline **audio player**:
+- **Click any timestamp** to jump there; the current segment highlights as it plays.
+- **Check segments** (or **Select all**) to build a selection — a bar shows the count
+  and total duration, with:
+  - **▶ Play selection** — auditions just the chosen ranges back-to-back.
+  - **Export .wav** — server stitches the selected ranges (ffmpeg `atrim`+`concat`)
+    into a single clean `<name>_clip.wav` and downloads it.
+  - **Copy** / **.txt** — the selected text.
+
+So the workflow is: listen → check the phrases worth keeping → export an edited-down
+.wav of just that audio.
 
 ## Recovering weak audio
 
