@@ -32,8 +32,7 @@ Then:
 ```bash
 cd /opt/wavereader-gpu        # or wherever you cloned it
 cp .env.example .env
-# edit .env -> set RECORDINGS_DIR to your IC-7610 transfer directory
-mkdir -p "$(grep RECORDINGS_DIR .env | cut -d= -f2)"
+# .env defaults RECORDINGS_DIR to /data1/recordings/incoming -- edit if yours differs
 
 docker compose up -d --build
 docker compose logs -f        # watch for "model loaded: ... cuda: NVIDIA GeForce RTX 5070 Ti"

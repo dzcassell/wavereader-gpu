@@ -11,7 +11,7 @@ services:
     volumes:
       # Your IC-7610 transfer directory on the host. Read-WRITE so the trash-can
       # delete can remove files from disk. Edit the left side to your path.
-      - ${RECORDINGS_DIR:-/opt/wavereader/recordings}:/data/incoming
+      - ${RECORDINGS_DIR:-/data1/recordings/incoming}:/data/incoming
       # Persistent app state: SQLite db, uploaded files, downloaded model weights.
       - wavereader-data:/data
     deploy:
