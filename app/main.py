@@ -256,38 +256,53 @@ async def tag(rec_id: int, req: TagReq):
 
     path = rec["path"]
     can_embed = os.path.exists(path)
+    if not can_embed:
+        log.warning("tag rec=%s: source file missing (%s) — tags recorded but NO voiceprints "
+                    "can be enrolled", rec_id, path)
 
     def work():
-        enrolled, short, lowq = 0, 0, 0
+        enrolled, short, lowq, failed = 0, 0, 0, 0
         for i in req.segments:
             if i < 0 or i >= len(segs):
                 continue
             s = segs[i]
             start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
+            dur = end - start
             db.set_segment_tag(rec_id, i, sid, "manual", None)   # always record the tag
-            if not can_embed or (end - start) < config.MIN_ENROLL_SEC:
-                if (end - start) < config.MIN_ENROLL_SEC:
-                    short += 1
+            if not can_embed:
+                continue
+            if dur < config.MIN_ENROLL_SEC:
+                short += 1
+                log.debug("enroll skip seg=%s: too short (%.2fs < %.1fs)", i, dur, config.MIN_ENROLL_SEC)
                 continue
             lp = s.get("logprob")
             if lp is not None and lp < config.SPK_ENROLL_MIN_LOGPROB:
-                lowq += 1                                        # too noisy for a clean print
+                lowq += 1
+                log.debug("enroll skip seg=%s: low quality (logprob %.2f < %.2f)",
+                          i, lp, config.SPK_ENROLL_MIN_LOGPROB)
                 continue
             try:
                 emb = voiceprint.embed(path, start, end)
                 db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
                 enrolled += 1
+                log.debug("enroll ok seg=%s dur=%.2fs", i, dur)
             except Exception as e:
-                log.warning("embed failed rec=%s seg=%s: %s", rec_id, i, e)
+                failed += 1
+                log.warning("enroll embed FAILED rec=%s seg=%s dur=%.2fs: %s", rec_id, i, dur, e)
         if enrolled:
             _build_profile(sid)   # keep the speaker's profile current
-        return enrolled, short, lowq
+        return enrolled, short, lowq, failed
 
-    enrolled, short, lowq = await asyncio.to_thread(work)
-    log.info("tagged rec=%s speaker=%s segs=%d enrolled=%d (skipped %d short, %d low-quality)",
-             rec_id, name, len(req.segments), enrolled, short, lowq)
+    enrolled, short, lowq, failed = await asyncio.to_thread(work)
+    if enrolled == 0:
+        log.info("tag rec=%s speaker='%s': enrolled 0 voiceprints from %d segment(s) "
+                 "(too-short=%d, low-quality=%d, embed-failed=%d). Build/Rebuild profile "
+                 "needs voiceprints — see reasons above.",
+                 rec_id, name, len(req.segments), short, lowq, failed)
+    log.info("tagged rec=%s speaker=%s segs=%d enrolled=%d (short=%d low-quality=%d failed=%d)",
+             rec_id, name, len(req.segments), enrolled, short, lowq, failed)
     return {"speaker_id": sid, "name": name, "tagged": len(req.segments),
-            "enrolled": enrolled, "skipped_short": short, "skipped_lowq": lowq}
+            "enrolled": enrolled, "skipped_short": short, "skipped_lowq": lowq, "failed": failed}
 
 
 @app.post("/api/recordings/{rec_id}/untag")
@@ -303,10 +318,15 @@ async def untag(rec_id: int, req: UntagReq):
 def _build_profile(speaker_id: int) -> int:
     """Recompute a speaker's profile (centroid) from its voiceprints. Returns count."""
     blobs = db.voiceprint_blobs(speaker_id)
+    name = db.speaker_name(speaker_id)
     if not blobs:
+        log.info("build_profile: speaker '%s' (id=%s) has 0 voiceprints — nothing to build "
+                 "(tag segments >= %.1fs to enroll prints first)", name, speaker_id, config.MIN_ENROLL_SEC)
         return 0
     c = voiceprint.centroid([voiceprint.blob_to_np(b) for b in blobs])
     db.set_profile(speaker_id, c.tobytes(), int(c.shape[0]), len(blobs))
+    log.info("build_profile: speaker '%s' (id=%s) built from %d voiceprint(s)",
+             name, speaker_id, len(blobs))
     return len(blobs)
 
 
@@ -360,16 +380,20 @@ def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
 
 @app.post("/api/speakers/{speaker_id}/profile")
 async def build_profile(speaker_id: int):
+    log.info("build_profile requested for speaker id=%s", speaker_id)
     n = await asyncio.to_thread(_build_profile, speaker_id)
     return {"speaker_id": speaker_id, "voiceprints": n}
 
 
 @app.post("/api/profiles")
 async def build_all_profiles():
+    speakers = db.list_speakers()
+    log.info("build all profiles requested for %d speaker(s)", len(speakers))
     def run():
-        return sum(1 for sp in db.list_speakers() if _build_profile(sp["id"]))
+        return sum(1 for sp in speakers if _build_profile(sp["id"]))
     built = await asyncio.to_thread(run)
-    log.info("built %d speaker profile(s)", built)
+    log.info("build all profiles done: %d of %d speaker(s) had voiceprints to build from",
+             built, len(speakers))
     return {"profiles_built": built}
 
 
@@ -416,10 +440,13 @@ async def rebuild_voiceprints():
     pipeline (e.g. after changing SPK_PREPROCESS), then rebuild profiles. Keeps
     enrollment and identification embeddings consistent."""
     def work():
+        all_vp = list(db.iter_voiceprints())
+        log.info("voiceprint rebuild: starting, %d voiceprint(s) to re-embed", len(all_vp))
         done, failed = 0, 0
-        for vp_id, _rid, _seg, start, end, path in db.iter_voiceprints():
+        for vp_id, rid, seg, start, end, path in all_vp:
             if not path or not os.path.exists(path):
                 failed += 1
+                log.warning("re-embed vp=%s rec=%s: source missing (%s)", vp_id, rid, path)
                 continue
             try:
                 emb = voiceprint.embed(path, start, end)
@@ -427,13 +454,13 @@ async def rebuild_voiceprints():
                 done += 1
             except Exception as e:
                 failed += 1
-                log.warning("re-embed vp=%s failed: %s", vp_id, e)
+                log.warning("re-embed vp=%s rec=%s seg=%s failed: %s", vp_id, rid, seg, e)
         for sp in db.list_speakers():
             _build_profile(sp["id"])
         return done, failed
 
     done, failed = await asyncio.to_thread(work)
-    log.info("voiceprint rebuild: %d re-embedded, %d failed", done, failed)
+    log.info("voiceprint rebuild complete: %d re-embedded, %d failed", done, failed)
     return {"rebuilt": done, "failed": failed}
 
 

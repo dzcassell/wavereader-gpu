@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 
 import numpy as np
 
@@ -30,12 +31,18 @@ def _load():
             except ImportError:  # older speechbrain layout
                 from speechbrain.pretrained import EncoderClassifier
             savedir = os.path.join(os.getenv("HF_HOME", "/data/model-cache"), "ecapa")
-            log.info("loading speaker model %s on %s", config.SPK_MODEL, config.DEVICE)
-            _model = EncoderClassifier.from_hparams(
-                source=config.SPK_MODEL, savedir=savedir,
-                run_opts={"device": config.DEVICE},
-            )
-            log.info("speaker model loaded")
+            log.info("loading speaker model %s on %s (savedir=%s)",
+                     config.SPK_MODEL, config.DEVICE, savedir)
+            t0 = time.monotonic()
+            try:
+                _model = EncoderClassifier.from_hparams(
+                    source=config.SPK_MODEL, savedir=savedir,
+                    run_opts={"device": config.DEVICE},
+                )
+            except Exception as e:
+                log.error("speaker model load FAILED: %s", e)
+                raise
+            log.info("speaker model loaded in %.1fs", time.monotonic() - t0)
     return _model
 
 
@@ -47,7 +54,11 @@ def _clip(path: str, start: float, end: float) -> str:
     cmd = ["ffmpeg", "-nostdin", "-y", "-i", path,
            "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
            "-ac", "1", "-ar", "16000", *af, tmp]
-    subprocess.run(cmd, capture_output=True, check=True, timeout=120)
+    proc = subprocess.run(cmd, capture_output=True, timeout=120)
+    if proc.returncode != 0:
+        os.remove(tmp)
+        tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
+        raise RuntimeError(f"ffmpeg clip failed (rc={proc.returncode}): {' | '.join(tail)}")
     return tmp
 
 
@@ -55,11 +66,14 @@ def embed(path: str, start: float, end: float) -> np.ndarray:
     """Return a normalized float32 voiceprint for the given time range."""
     import torch  # noqa
     import torchaudio
+    log.debug("embed: %s [%.2f-%.2f] dur=%.2fs preprocess=%s",
+              os.path.basename(path), start, end, end - start, config.SPK_PREPROCESS)
     tmp = _clip(path, start, end)
     try:
         signal, _sr = torchaudio.load(tmp)
         emb = _load().encode_batch(signal).squeeze().detach().cpu().numpy().astype("float32")
         norm = float(np.linalg.norm(emb))
+        log.debug("embed: ok, dim=%d norm=%.3f", emb.shape[0], norm)
         return emb / norm if norm > 0 else emb
     finally:
         try:
