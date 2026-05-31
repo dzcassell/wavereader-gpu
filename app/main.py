@@ -485,6 +485,15 @@ async def rebuild_voiceprints():
     return {"rebuilt": done, "failed": failed}
 
 
+@app.post("/api/tags/clear-auto")
+async def clear_auto_tags():
+    """Remove every auto-identified tag, keeping manual tags — so you can re-identify
+    from a clean slate after improving profiles."""
+    n = db.clear_auto_tags()
+    log.info("cleared %d auto (identified) tag(s); manual tags kept", n)
+    return {"cleared": n}
+
+
 @app.post("/api/voiceprints/enroll-tags")
 async def enroll_tags():
     """Create voiceprints for every manually-tagged segment that doesn't have one yet

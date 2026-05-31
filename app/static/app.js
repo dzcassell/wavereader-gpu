@@ -827,6 +827,18 @@ document.getElementById("rebuildPrints").addEventListener("click", async (e) => 
   finally { e.target.disabled = false; }
 });
 
+document.getElementById("clearAuto").addEventListener("click", async (e) => {
+  if (!confirm("Remove all auto-identified tags? Your manually-created tags are kept.")) return;
+  e.target.disabled = true;
+  document.getElementById("spkInfo").textContent = "clearing auto-tags…";
+  try {
+    const d = await (await fetch("/api/tags/clear-auto", { method: "POST" })).json();
+    document.getElementById("spkInfo").textContent = `cleared ${d.cleared} auto-tag(s)`;
+    loadRecordings();
+  } catch { document.getElementById("spkInfo").textContent = "clear failed"; }
+  finally { e.target.disabled = false; }
+});
+
 document.getElementById("scanIdentify").addEventListener("click", async (e) => {
   const onlyNew = document.getElementById("idOnlyNew").checked;
   const sep = spkThresholdParam() ? "&" : "?";

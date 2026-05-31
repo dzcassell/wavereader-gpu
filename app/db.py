@@ -355,6 +355,12 @@ def update_voiceprint_emb(vp_id: int, emb: bytes, dim: int) -> None:
     _exec("UPDATE voiceprints SET emb=?, dim=? WHERE id=?", (emb, dim, vp_id))
 
 
+def clear_auto_tags() -> int:
+    """Delete all auto-identified tags, keeping manual ones. Returns count removed."""
+    cur = _exec("DELETE FROM segment_tags WHERE source='auto'")
+    return cur.rowcount
+
+
 def manual_tag_recordings() -> list[int]:
     """Distinct recording ids that have at least one manual tag."""
     with _lock:
