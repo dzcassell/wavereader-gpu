@@ -170,6 +170,13 @@ def delete_recording(rec_id: int) -> None:
     _exec("DELETE FROM recordings WHERE id=?", (rec_id,))
 
 
+def requeue_stuck() -> int:
+    """Return rows orphaned in 'processing' (e.g. container killed mid-transcription)
+    back to 'pending'. Safe to call at startup before the worker runs. Returns count."""
+    cur = _exec("UPDATE recordings SET status='pending', error=NULL WHERE status='processing'")
+    return cur.rowcount
+
+
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     with _lock:
         row = _conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()

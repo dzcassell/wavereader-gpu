@@ -36,6 +36,9 @@ async def lifespan(app: FastAPI):
     os.makedirs(config.UPLOAD_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)
     db.init()
+    stuck = db.requeue_stuck()
+    if stuck:
+        log.info("re-queued %d recording(s) left in 'processing' by a previous run", stuck)
     # Load the model eagerly so the first transcription isn't cold, and so a
     # broken GPU setup surfaces at startup instead of silently mid-job.
     try:
