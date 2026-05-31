@@ -1,0 +1,262 @@
+const rowsEl = document.getElementById("rows");
+const healthEl = document.getElementById("health");
+const gpuEl = document.getElementById("gpu");
+const open = new Set();          // ids whose transcript is expanded
+let rowCache = {};               // id -> recording summary
+let currentQuery = "";           // active search term
+let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
+
+function fmtDur(s) {
+  if (!s && s !== 0) return "—";
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+function fmtTs(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+async function loadHealth() {
+  try {
+    const h = await (await fetch("/api/health")).json();
+    healthEl.textContent = h.status;
+    healthEl.title = `${h.engine} · ${h.model} · ${h.status}`;
+  } catch { healthEl.textContent = "unreachable"; }
+}
+
+async function loadModels() {
+  try { modelInfo = await (await fetch("/api/models")).json(); }
+  catch { /* keep defaults */ }
+}
+
+async function loadStats() {
+  const wrap = document.getElementById("progress");
+  let s;
+  try { s = await (await fetch("/api/stats")).json(); }
+  catch { return; }
+  if (!s.total) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const pct = Math.round((s.done / s.total) * 100);
+  document.getElementById("pfill").style.width = `${pct}%`;
+  const queue = s.pending + s.processing;
+  let info = `${s.done}/${s.total} transcribed (${pct}%)`;
+  if (queue) info += ` · ${queue} in queue`;
+  if (s.error) info += ` · ${s.error} errored`;
+  document.getElementById("pinfo").textContent = info;
+}
+
+async function loadGpu() {
+  try {
+    const g = await (await fetch("/api/gpu")).json();
+    const gpu = (g.gpus || [])[0];
+    if (!gpu) { gpuEl.textContent = "GPU: none"; return; }
+    const util = gpu.utilization_pct != null ? `${gpu.utilization_pct}%` : "—";
+    const mem = gpu.memory_total_mb
+      ? `${(gpu.memory_used_mb / 1024).toFixed(1)}/${(gpu.memory_total_mb / 1024).toFixed(1)}G` : "—";
+    const temp = gpu.temperature_c != null ? ` · ${gpu.temperature_c}°C` : "";
+    gpuEl.textContent = `${gpu.name} · ${util} · ${mem}${temp}`;
+    gpuEl.title = `${g.source}: ${gpu.name}, util ${util}, mem ${mem}${temp}`;
+  } catch { gpuEl.textContent = "GPU: unreachable"; }
+}
+
+async function loadRecordings() {
+  let recs;
+  const url = currentQuery ? `/api/recordings?q=${encodeURIComponent(currentQuery)}` : "/api/recordings";
+  try { recs = await (await fetch(url)).json(); }
+  catch { return; }
+  document.getElementById("searchInfo").textContent =
+    currentQuery ? `${recs.length} match${recs.length === 1 ? "" : "es"}` : "";
+  rowCache = {};
+  rowsEl.innerHTML = "";
+  for (const r of recs) {
+    rowCache[r.id] = r;
+    rowsEl.appendChild(renderRow(r));
+    if (open.has(r.id)) {
+      const tr = renderTranscriptRow(r.id);
+      rowsEl.appendChild(tr);
+      loadTranscript(r.id, tr.querySelector(".transcript"));
+    }
+  }
+}
+
+function renderRow(r) {
+  const tr = document.createElement("tr");
+  tr.className = "rec";
+  tr.dataset.id = r.id;
+  const caretOpen = open.has(r.id) ? "open" : "";
+  tr.innerHTML = `
+    <td><span class="caret ${caretOpen}">▶</span></td>
+    <td>${escapeHtml(r.filename)}</td>
+    <td class="muted">${r.source}</td>
+    <td><span class="badge ${r.status}">${r.status}</span></td>
+    <td class="muted">${fmtDur(r.duration)}</td>
+    <td><button class="btn dl">Download</button></td>`;
+  tr.querySelector(".dl").addEventListener("click", (e) => {
+    e.stopPropagation();
+    window.location = `/api/recordings/${r.id}/download`;
+  });
+  tr.addEventListener("click", () => toggle(r.id));
+  return tr;
+}
+
+function renderTranscriptRow(id) {
+  const tr = document.createElement("tr");
+  tr.className = "transcript-row";
+  tr.dataset.for = id;
+  tr.innerHTML = `<td colspan="6"><div class="transcript">Loading…</div></td>`;
+  return tr;
+}
+
+function toggle(id) {
+  if (open.has(id)) open.delete(id); else open.add(id);
+  loadRecordings();
+}
+
+async function loadTranscript(id, el) {
+  let rec;
+  try { rec = await (await fetch(`/api/recordings/${id}`)).json(); }
+  catch { el.innerHTML = `<div class="err-msg">Failed to load.</div>`; return; }
+  if (rec.status === "processing" || rec.status === "pending") {
+    el.innerHTML = `<div class="empty">Not transcribed yet (${rec.status})…</div>`;
+    return;
+  }
+
+  const parts = [];
+  if (rec.status === "error") {
+    parts.push(`<div class="err-msg">Transcription error: ${escapeHtml(rec.error || "unknown")}</div>`);
+  } else if (!rec.segments || !rec.segments.length) {
+    parts.push(`<div class="empty">No speech detected.</div>`);
+  } else {
+    const exportBtns = `
+      <button class="btn copy">Copy text</button>
+      <a class="btn" href="/api/recordings/${id}/export?fmt=txt">.txt</a>
+      <a class="btn" href="/api/recordings/${id}/export?fmt=srt">.srt</a>
+      <a class="btn" href="/api/recordings/${id}/export?fmt=vtt">.vtt</a>`;
+    parts.push(`<div class="tbar">${exportBtns}</div>`);
+    parts.push(rec.segments.map(s =>
+      `<div class="seg"><span class="ts">${fmtTs(s.start)}</span><span class="tx">${highlight(s.text)}</span></div>`
+    ).join(""));
+  }
+  parts.push(retranscribeControl(rec));
+  el.innerHTML = parts.join("");
+
+  const copyBtn = el.querySelector(".copy");
+  if (copyBtn) copyBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(rec.text || "");
+      e.target.textContent = "Copied ✓";
+      setTimeout(() => (e.target.textContent = "Copy text"), 1500);
+    } catch { e.target.textContent = "Copy failed"; }
+  });
+  wireRetranscribe(el, id);
+}
+
+function retranscribeControl(rec) {
+  const curModel = rec.model || modelInfo.default_model;
+  const curEngine = rec.engine || modelInfo.default_engine;
+  const modelOpts = modelInfo.models.map(m =>
+    `<option value="${m}" ${m === curModel ? "selected" : ""}>${m}</option>`).join("");
+  const engineOpts = modelInfo.engines.map(e =>
+    `<option value="${e}" ${e === curEngine ? "selected" : ""}>${e}</option>`).join("");
+  return `
+    <div class="retro">
+      <span class="muted">Re-transcribe with</span>
+      <select class="rt-model">${modelOpts}</select>
+      <select class="rt-engine">${engineOpts}</select>
+      <button class="btn rt-go">Re-transcribe</button>
+    </div>`;
+}
+
+function wireRetranscribe(el, id) {
+  const btn = el.querySelector(".rt-go");
+  if (!btn) return;
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const model = el.querySelector(".rt-model").value;
+    const engine = el.querySelector(".rt-engine").value;
+    btn.disabled = true;
+    btn.textContent = "Queued…";
+    try {
+      await fetch(`/api/recordings/${id}/retranscribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, engine }),
+      });
+      loadRecordings();
+    } catch {
+      btn.disabled = false;
+      btn.textContent = "Failed — retry";
+    }
+  });
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function highlight(s) {
+  const esc = escapeHtml(s);
+  if (!currentQuery) return esc;
+  const q = currentQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return esc.replace(new RegExp(q, "gi"), m => `<mark>${m}</mark>`);
+}
+
+// ---- Uploads ----
+const dz = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const uploadStatus = document.getElementById("uploadStatus");
+
+fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
+["dragenter", "dragover"].forEach(ev =>
+  dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev =>
+  dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("drag"); }));
+dz.addEventListener("drop", e => uploadFiles(e.dataTransfer.files));
+
+async function uploadFiles(files) {
+  for (const f of files) {
+    uploadStatus.textContent = `Uploading ${f.name}…`;
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      uploadStatus.textContent = res.ok ? `Queued ${f.name}` : `Failed ${f.name}: ${(await res.json()).detail}`;
+    } catch { uploadStatus.textContent = `Failed ${f.name}`; }
+  }
+  loadRecordings();
+}
+
+// ---- Search ----
+const searchEl = document.getElementById("search");
+let searchTimer = null;
+searchEl.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    currentQuery = searchEl.value.trim();
+    loadRecordings();
+  }, 250);
+});
+
+// ---- Free models ----
+const freeBtn = document.getElementById("freeBtn");
+freeBtn.addEventListener("click", async () => {
+  freeBtn.disabled = true;
+  freeBtn.textContent = "Freeing…";
+  try {
+    const r = await (await fetch("/api/models/free", { method: "POST" })).json();
+    freeBtn.textContent = `Freed ${r.freed.length}`;
+    loadGpu();
+  } catch { freeBtn.textContent = "Failed"; }
+  setTimeout(() => { freeBtn.textContent = "Free models"; freeBtn.disabled = false; }, 1500);
+});
+
+loadModels();
+loadHealth();
+loadGpu();
+loadRecordings();
+loadStats();
+setInterval(loadRecordings, 4000);   // live status refresh
+setInterval(loadStats, 4000);        // backlog progress
+setInterval(loadHealth, 15000);
+setInterval(loadGpu, 3000);          // GPU telemetry

@@ -1,0 +1,27 @@
+# Secrets / local config
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local data (db, uploads, model cache) if ever run outside Docker
+data/
+*.sqlite
+*.db
+
+# Audio samples
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

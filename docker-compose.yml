@@ -1,0 +1,25 @@
+services:
+  wavereader:
+    build: .
+    image: wavereader-gpu:latest
+    container_name: wavereader-gpu
+    restart: unless-stopped
+    ports:
+      - "8080:8000"
+    env_file:
+      - .env
+    volumes:
+      # Your IC-7610 transfer directory on the host, read-only. Edit the left side.
+      - ${RECORDINGS_DIR:-/opt/wavereader/recordings}:/data/incoming:ro
+      # Persistent app state: SQLite db, uploaded files, downloaded model weights.
+      - wavereader-data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  wavereader-data:

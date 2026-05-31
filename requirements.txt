@@ -1,0 +1,14 @@
+# Web layer
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Primary transcription engine (CTranslate2 backend)
+faster-whisper==1.1.1
+
+# Fallback engine (PyTorch). torch itself is installed in the Dockerfile from the
+# CUDA 12.8 index so it includes Blackwell / sm_120 kernels for the RTX 5070 Ti.
+transformers==4.48.0
+accelerate==1.2.1
+soundfile==0.13.0
+librosa==0.10.2.post1

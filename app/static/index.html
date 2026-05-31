@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wavereader-gpu</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>📻 wavereader-gpu</h1>
+    <span id="gpu" class="health" title="GPU telemetry">GPU …</span>
+    <button id="freeBtn" class="chipbtn" title="Release all cached models from VRAM">Free models</button>
+    <span id="health" class="health" title="transcription engine status">…</span>
+  </header>
+
+  <section class="dropzone" id="dropzone">
+    <p>Drop .wav files here or <label class="link">browse<input type="file" id="fileInput" accept=".wav,.flac,.mp3,.m4a,.ogg" multiple hidden></label> to upload.</p>
+    <p class="muted">Files copied into the watched directory are picked up automatically.</p>
+    <div id="uploadStatus"></div>
+  </section>
+
+  <div class="searchbar">
+    <input type="search" id="search" placeholder="Search filenames and transcripts…" autocomplete="off">
+    <span id="searchInfo" class="muted"></span>
+  </div>
+
+  <div class="progress" id="progress" hidden>
+    <div class="pbar"><div class="pfill" id="pfill"></div></div>
+    <span class="muted" id="pinfo"></span>
+  </div>
+
+  <table id="table">
+    <thead>
+      <tr><th></th><th>File</th><th>Source</th><th>Status</th><th>Duration</th><th></th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Normalize all text files to LF; this project runs in Linux containers.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.wav binary

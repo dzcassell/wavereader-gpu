@@ -1,0 +1,89 @@
+:root {
+  --bg: #0f1115;
+  --panel: #181b22;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --muted: #8a93a6;
+  --accent: #4fc3f7;
+  --ok: #56d364;
+  --err: #f85149;
+  --warn: #e3b341;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 1rem;
+  padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+}
+h1 { font-size: 1.25rem; margin: 0; }
+.health {
+  margin-left: auto; font-size: .8rem; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border);
+  padding: .3rem .6rem; border-radius: 6px; max-width: 50%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chipbtn {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: .3rem .6rem; font-size: .8rem; cursor: pointer;
+}
+.chipbtn:hover { border-color: var(--accent); }
+.chipbtn:disabled { opacity: .6; cursor: default; }
+.progress { display: flex; align-items: center; gap: .8rem; margin: 0 1.5rem 1rem; }
+.pbar {
+  flex: 1; height: 8px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 999px; overflow: hidden;
+}
+.pfill { height: 100%; width: 0; background: var(--ok); transition: width .4s ease; }
+.dropzone {
+  margin: 1.5rem; padding: 1.5rem; text-align: center;
+  border: 2px dashed var(--border); border-radius: 10px; background: var(--panel);
+  transition: border-color .15s;
+}
+.dropzone.drag { border-color: var(--accent); }
+.dropzone p { margin: .3rem 0; }
+.link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+.muted { color: var(--muted); font-size: .85rem; }
+.searchbar { display: flex; align-items: center; gap: .8rem; margin: 0 1.5rem 1rem; }
+.searchbar input {
+  flex: 1; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: .55rem .8rem; font-size: .95rem;
+}
+.searchbar input:focus { outline: none; border-color: var(--accent); }
+table { width: calc(100% - 3rem); margin: 0 1.5rem 2rem; border-collapse: collapse; }
+th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+tr.rec { cursor: pointer; }
+tr.rec:hover { background: #1d2129; }
+.caret { display: inline-block; width: 1em; transition: transform .15s; color: var(--muted); }
+.caret.open { transform: rotate(90deg); }
+.badge { font-size: .78rem; padding: .15rem .5rem; border-radius: 999px; border: 1px solid var(--border); }
+.badge.pending { color: var(--muted); }
+.badge.processing { color: var(--warn); border-color: var(--warn); }
+.badge.done { color: var(--ok); border-color: var(--ok); }
+.badge.error { color: var(--err); border-color: var(--err); }
+.btn {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: .3rem .7rem; cursor: pointer; font-size: .85rem;
+}
+.btn:hover { border-color: var(--accent); }
+.transcript { background: #11141a; padding: 1rem 1.25rem; }
+.tbar { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.tbar .btn { font-size: .8rem; padding: .25rem .6rem; }
+mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .1em; }
+.retro {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--border);
+}
+.retro select {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: .25rem .4rem; font-size: .82rem;
+}
+.retro select:focus { outline: none; border-color: var(--accent); }
+.seg { display: flex; gap: .8rem; padding: .15rem 0; }
+.seg .ts { color: var(--accent); font-variant-numeric: tabular-nums; flex: 0 0 5.5rem; }
+.seg .tx { white-space: pre-wrap; }
+.empty, .err-msg { color: var(--muted); padding: .5rem 0; }
+.err-msg { color: var(--err); }
