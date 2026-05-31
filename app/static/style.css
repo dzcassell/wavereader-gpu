@@ -147,6 +147,10 @@ mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .
 .sp-row:hover { background: #1d2129; }
 .sp-name { font-weight: 600; }
 .sp-meta { color: var(--muted); font-size: .8rem; margin-right: auto; }
+.tagchip {
+  display: inline-block; background: #2a2233; border: 1px solid #b08cff; color: #cbb6ff;
+  border-radius: 999px; padding: 0 .5rem; font-size: .75rem; white-space: nowrap;
+}
 
 /* Heard & alerts panel */
 .heardpanel { margin: 0 1.5rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 1rem; }

@@ -96,6 +96,9 @@ the GPU name) rather than silently falling back to CPU.
 | DELETE | `/api/speakers/{id}` | delete a speaker and its voiceprints/tags |
 | POST | `/api/recordings/{id}/tag` | tag segments with a speaker (enrolls voiceprints); body `{segments:[i], speaker_id\|name}` |
 | POST | `/api/recordings/{id}/untag` | remove speaker tags from segments |
+| POST | `/api/speakers/{id}/profile` · `/api/profiles` | (re)build one / all speaker profiles |
+| POST | `/api/recordings/{id}/identify` | auto-tag voices in one file (`?threshold=`) |
+| POST | `/api/identify` | background scan + auto-tag across files (`?threshold=&only_new=`) |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
 | GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |
@@ -139,9 +142,19 @@ Identify and label *who* is speaking, building a per-voice library over time.
   voiceprints/tags it has; delete removes the voice and its data.
 - Remove a label with the **×** on a segment's speaker chip.
 
-This is **Phase 1 (manual enrollment)**. Phase 2 will use the accumulated voiceprints
-to **auto-identify** speakers on new transcripts with a confidence score, improving as
-you tag/correct. The per-speaker clips this produces are also the labeled dataset you'd
+**Auto-identification (Phase 2).** Each speaker's voiceprints are averaged into a
+**profile** (centroid), rebuilt automatically as you tag (or via **Build profiles**).
+Then:
+- **Identify speakers** (per file, in the transcript toolbar) embeds each segment,
+  matches it against your profiles, and auto-tags any above the **match threshold**
+  with a **confidence %** (shown as a dashed chip). Manual tags are never overwritten.
+- **Scan & auto-tag** (Speakers panel) does the same across all transcribed files in
+  the background — the **Tags** column fills in live. "Only un-scanned files" keeps it
+  incremental.
+- Tune **Match threshold** (default `SPK_THRESHOLD=0.45`): higher = stricter/fewer.
+
+It learns over time: every manual tag/correction enriches that profile, so re-running
+identify gets more accurate. The per-speaker clips are also the labeled dataset you'd
 later feed a voice-cloning / TTS model.
 
 > Speaker-ID adds `torchaudio` + `speechbrain`; the ECAPA model (~80 MB) downloads to

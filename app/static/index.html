@@ -59,6 +59,15 @@
   <section class="heardpanel" id="speakerspanel" hidden>
     <div class="heard-head"><strong>Speakers</strong>
       <span class="muted">tag voices in a transcript (check segments → "Tag as…") to enroll them here</span></div>
+    <div class="heard-head">
+      <label>Match threshold
+        <input type="number" id="spkThreshold" min="0" max="1" step="0.05" value="0.45" class="tag-spk" style="width:4.5rem">
+      </label>
+      <button id="buildProfiles" class="chipbtn" title="Recompute every speaker's profile from its voiceprints">Build profiles</button>
+      <label class="check"><input type="checkbox" id="idOnlyNew" checked> only un-scanned files</label>
+      <button id="scanIdentify" class="chipbtn" title="Scan transcribed files and auto-tag recognized voices">Scan &amp; auto-tag</button>
+      <span id="spkInfo" class="muted"></span>
+    </div>
     <div id="speakerList" class="entlist"></div>
   </section>
 
@@ -81,7 +90,7 @@
 
   <table id="table">
     <thead>
-      <tr><th></th><th>File</th><th>Source</th><th>Status</th><th>Duration</th><th></th></tr>
+      <tr><th></th><th>File</th><th>Tags</th><th>Source</th><th>Status</th><th>Duration</th><th></th></tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>

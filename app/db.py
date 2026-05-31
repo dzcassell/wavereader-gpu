@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS segment_tags (
     confidence   REAL,
     PRIMARY KEY (recording_id, seg_index)
 );
+
+CREATE TABLE IF NOT EXISTS speaker_profiles (
+    speaker_id INTEGER PRIMARY KEY,
+    dim        INTEGER NOT NULL,
+    emb        BLOB NOT NULL,
+    n          INTEGER NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 # Columns added after initial release; ALTER on existing databases.
@@ -209,15 +217,18 @@ def list_recordings(query: Optional[str] = None, alerts_only: bool = False) -> l
     if alerts_only:
         where.append("alerts IS NOT NULL AND alerts != '[]' AND alerts != ''")
     clause = (" WHERE " + " AND ".join(where)) if where else ""
+    tag_sub = ("(SELECT GROUP_CONCAT(DISTINCT s.name) FROM segment_tags t "
+               "JOIN speakers s ON s.id=t.speaker_id WHERE t.recording_id=recordings.id) AS tag_names")
     with _lock:
         rows = _conn.execute(
-            f"SELECT {_LIST_COLS} FROM recordings{clause} ORDER BY created_at DESC",
+            f"SELECT {_LIST_COLS}, {tag_sub} FROM recordings{clause} ORDER BY created_at DESC",
             tuple(params),
         ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
         d["alerts"] = json.loads(d["alerts"]) if d.get("alerts") else []
+        d["tags"] = sorted((d.pop("tag_names") or "").split(",")) if d.get("tag_names") else []
         out.append(d)
     return out
 
@@ -301,10 +312,36 @@ def list_speakers() -> list[dict]:
         rows = _conn.execute(
             "SELECT s.id, s.name, "
             "(SELECT COUNT(*) FROM voiceprints v WHERE v.speaker_id=s.id) AS prints, "
-            "(SELECT COUNT(*) FROM segment_tags t WHERE t.speaker_id=s.id) AS tags "
+            "(SELECT COUNT(*) FROM segment_tags t WHERE t.speaker_id=s.id) AS tags, "
+            "(SELECT n FROM speaker_profiles p WHERE p.speaker_id=s.id) AS profile_n "
             "FROM speakers s ORDER BY s.name"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def voiceprint_blobs(speaker_id: int) -> list[bytes]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT emb FROM voiceprints WHERE speaker_id=?", (speaker_id,)).fetchall()
+    return [r["emb"] for r in rows]
+
+
+def set_profile(speaker_id: int, emb: bytes, dim: int, n: int) -> None:
+    _exec("INSERT INTO speaker_profiles (speaker_id, dim, emb, n, updated_at) "
+          "VALUES (?, ?, ?, ?, ?) "
+          "ON CONFLICT(speaker_id) DO UPDATE SET dim=excluded.dim, emb=excluded.emb, "
+          "n=excluded.n, updated_at=excluded.updated_at",
+          (speaker_id, dim, emb, n, time.time()))
+
+
+def get_profiles() -> list[dict]:
+    """Return [{id, name, emb(bytes), dim}] for speakers that have a built profile."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT p.speaker_id AS id, s.name, p.emb, p.dim "
+            "FROM speaker_profiles p JOIN speakers s ON s.id=p.speaker_id"
+        ).fetchall()
+    return [{"id": r["id"], "name": r["name"], "emb": r["emb"], "dim": r["dim"]} for r in rows]
 
 
 def speaker_name(speaker_id: int) -> Optional[str]:
@@ -316,6 +353,7 @@ def speaker_name(speaker_id: int) -> Optional[str]:
 def delete_speaker(speaker_id: int) -> None:
     _exec("DELETE FROM voiceprints WHERE speaker_id=?", (speaker_id,))
     _exec("DELETE FROM segment_tags WHERE speaker_id=?", (speaker_id,))
+    _exec("DELETE FROM speaker_profiles WHERE speaker_id=?", (speaker_id,))
     _exec("DELETE FROM speakers WHERE id=?", (speaker_id,))
 
 

@@ -51,6 +51,9 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 SPK_MODEL = os.getenv("SPK_MODEL", "speechbrain/spkrec-ecapa-voxceleb")
 # A segment must be at least this long (seconds) to enroll a usable voiceprint.
 MIN_ENROLL_SEC = float(os.getenv("MIN_ENROLL_SEC", "1.5"))
+# Cosine-similarity threshold for auto-identifying a speaker (ECAPA voiceprints).
+# Higher = stricter (fewer, more-confident matches). ~0.40-0.55 is a sane range.
+SPK_THRESHOLD = float(os.getenv("SPK_THRESHOLD", "0.45"))
 
 # --- Logging ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR

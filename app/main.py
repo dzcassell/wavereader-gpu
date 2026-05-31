@@ -273,6 +273,8 @@ async def tag(rec_id: int, req: TagReq):
                     log.warning("embed failed rec=%s seg=%s: %s", rec_id, i, e)
             elif end - start < config.MIN_ENROLL_SEC:
                 short += 1
+        if enrolled:
+            _build_profile(sid)   # keep the speaker's profile current
         return enrolled, short
 
     enrolled, short = await asyncio.to_thread(work)
@@ -288,6 +290,110 @@ async def untag(rec_id: int, req: UntagReq):
         db.remove_segment_tag(rec_id, i)
         db.remove_voiceprint(rec_id, i)
     return {"untagged": len(req.segments)}
+
+
+# --- Speaker profiles + auto-identification (Phase 2) ---
+
+def _build_profile(speaker_id: int) -> int:
+    """Recompute a speaker's profile (centroid) from its voiceprints. Returns count."""
+    blobs = db.voiceprint_blobs(speaker_id)
+    if not blobs:
+        return 0
+    c = voiceprint.centroid([voiceprint.blob_to_np(b) for b in blobs])
+    db.set_profile(speaker_id, c.tobytes(), int(c.shape[0]), len(blobs))
+    return len(blobs)
+
+
+def _load_profiles() -> list[dict]:
+    return [{"id": p["id"], "name": p["name"], "emb": voiceprint.blob_to_np(p["emb"])}
+            for p in db.get_profiles()]
+
+
+def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
+                        profiles: list = None) -> int:
+    rec = db.get_recording(rec_id)
+    if not rec or not os.path.exists(rec["path"]):
+        return 0
+    segs = rec.get("segments") or []
+    if profiles is None:
+        profiles = _load_profiles()
+    if not profiles:
+        return 0
+    tags = db.get_segment_tags(rec_id)
+    n = 0
+    for i, s in enumerate(segs):
+        ex = tags.get(i)
+        if ex and ex["source"] == "manual":
+            continue                          # never override a human tag
+        if ex and ex["source"] == "auto" and not overwrite:
+            continue
+        start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
+        if end - start < config.MIN_ENROLL_SEC:
+            continue
+        try:
+            emb = voiceprint.embed(rec["path"], start, end)
+        except Exception as e:
+            log.warning("identify embed failed rec=%s seg=%s: %s", rec_id, i, e)
+            continue
+        sid, score = voiceprint.identify(emb, profiles)
+        if sid is not None and score >= threshold:
+            db.set_segment_tag(rec_id, i, sid, "auto", round(score, 3))
+            n += 1
+        elif ex and ex["source"] == "auto":
+            db.remove_segment_tag(rec_id, i)   # was auto, no longer confident
+    return n
+
+
+@app.post("/api/speakers/{speaker_id}/profile")
+async def build_profile(speaker_id: int):
+    n = await asyncio.to_thread(_build_profile, speaker_id)
+    return {"speaker_id": speaker_id, "voiceprints": n}
+
+
+@app.post("/api/profiles")
+async def build_all_profiles():
+    def run():
+        return sum(1 for sp in db.list_speakers() if _build_profile(sp["id"]))
+    built = await asyncio.to_thread(run)
+    log.info("built %d speaker profile(s)", built)
+    return {"profiles_built": built}
+
+
+@app.post("/api/recordings/{rec_id}/identify")
+async def identify_one(rec_id: int, threshold: float | None = None):
+    th = config.SPK_THRESHOLD if threshold is None else threshold
+    n = await asyncio.to_thread(_identify_recording, rec_id, th, True, None)
+    log.info("identify rec=%s: %d auto-tag(s) at threshold %.2f", rec_id, n, th)
+    return {"identified": n, "threshold": th}
+
+
+@app.post("/api/identify")
+async def identify_all(threshold: float | None = None, only_new: bool = True):
+    """Scan transcribed files and auto-tag recognized voices. Runs in the background
+    (can be long); the Tags column fills in live as it progresses."""
+    th = config.SPK_THRESHOLD if threshold is None else threshold
+    if not db.get_profiles():
+        raise HTTPException(400, "no speaker profiles yet — tag some voices first")
+
+    async def run():
+        def work():
+            profiles = _load_profiles()
+            files, tags = 0, 0
+            for rid, _f, _segs, _t in db.iter_done_segments():
+                if only_new and any(t["source"] == "auto"
+                                    for t in db.get_segment_tags(rid).values()):
+                    continue
+                tags += _identify_recording(rid, th, True, profiles)
+                files += 1
+                if files % 25 == 0:
+                    log.info("identify-all progress: %d files, %d auto-tags so far", files, tags)
+            return files, tags
+        files, tags = await asyncio.to_thread(work)
+        log.info("identify-all complete: %d files scanned, %d auto-tags at threshold %.2f",
+                 files, tags, th)
+
+    asyncio.create_task(run())
+    return {"started": True, "threshold": th, "only_new": only_new}
 
 
 @app.get("/api/recordings/{rec_id}")

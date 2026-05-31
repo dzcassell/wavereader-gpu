@@ -66,6 +66,27 @@ def embed(path: str, start: float, end: float) -> np.ndarray:
             pass
 
 
+def blob_to_np(b: bytes) -> np.ndarray:
+    return np.frombuffer(b, dtype=np.float32)
+
+
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
     """Cosine similarity of two already-normalized vectors."""
     return float(np.dot(a, b))
+
+
+def centroid(embeddings: list[np.ndarray]) -> np.ndarray:
+    """Normalized mean of voiceprints — a speaker's profile vector."""
+    m = np.vstack(embeddings).mean(axis=0)
+    norm = float(np.linalg.norm(m))
+    return (m / norm if norm > 0 else m).astype("float32")
+
+
+def identify(emb: np.ndarray, profiles: list[dict]) -> tuple:
+    """Return (best_speaker_id, score) over profiles [{id, emb}], or (None, 0.0)."""
+    best_id, best = None, -1.0
+    for p in profiles:
+        sc = cosine(emb, p["emb"])
+        if sc > best:
+            best, best_id = sc, p["id"]
+    return best_id, max(0.0, best)

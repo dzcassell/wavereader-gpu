@@ -176,6 +176,11 @@ function alertMark(r) {
   return (r.alerts && r.alerts.length) ? "🔔" : "";
 }
 
+function tagChips(tags) {
+  if (!tags || !tags.length) return `<span class="muted">—</span>`;
+  return tags.map(t => `<span class="tagchip">${escapeHtml(t)}</span>`).join(" ");
+}
+
 function updateRow(row, r) {
   row.querySelector(".caret").classList.toggle("open", open.has(r.id));
   const badge = row.querySelector(".badge");
@@ -189,6 +194,9 @@ function updateRow(row, r) {
   const ab = row.querySelector(".alert-badge");
   const mark = alertMark(r);
   if (ab.textContent !== mark) ab.textContent = mark;
+  const tc = row.querySelector(".tags-cell");
+  const tags = (r.tags || []).join(",");
+  if (tc.dataset.tags !== tags) { tc.dataset.tags = tags; tc.innerHTML = tagChips(r.tags); }
 }
 
 function renderRow(r) {
@@ -199,6 +207,7 @@ function renderRow(r) {
   tr.innerHTML = `
     <td><span class="caret ${caretOpen}">▶</span></td>
     <td>${escapeHtml(r.filename)}<span class="alert-badge" title="matched a watch term">${alertMark(r)}</span></td>
+    <td class="tags-cell">${tagChips(r.tags)}</td>
     <td class="muted">${r.source}</td>
     <td><span class="badge ${r.status}">${r.status}</span></td>
     <td class="muted dur">${fmtDur(r.duration)}</td>
@@ -222,7 +231,7 @@ function renderTranscriptRow(id) {
   const tr = document.createElement("tr");
   tr.className = "transcript-row";
   tr.dataset.for = id;
-  tr.innerHTML = `<td colspan="6"><div class="transcript">Loading…</div></td>`;
+  tr.innerHTML = `<td colspan="7"><div class="transcript">Loading…</div></td>`;
   return tr;
 }
 
@@ -267,6 +276,7 @@ async function loadTranscript(id, el) {
       <a class="btn" href="/api/recordings/${id}/export?fmt=srt">.srt</a>
       <a class="btn" href="/api/recordings/${id}/export?fmt=vtt">.vtt</a>
       <button class="btn sel-all">Select all</button>
+      <button class="btn identify" title="Auto-tag voices in this file using your speaker profiles">Identify speakers</button>
       <span class="muted seg-hint">tip: check segments to export a clip · click a timestamp to play</span>
     </div>`);
     const lowCount = rec.segments.filter(isLowConf).length;
@@ -330,6 +340,12 @@ function speakerChip(s, i) {
     `<button class="spk-x" data-i="${i}" title="remove tag">×</button></span>`;
 }
 
+function spkThresholdParam() {
+  const el = document.getElementById("spkThreshold");
+  const v = el && el.value !== "" ? parseFloat(el.value) : null;
+  return (v != null && !isNaN(v)) ? `?threshold=${v}` : "";
+}
+
 function speakerOptions(selectedId) {
   const opts = speakers.map(sp =>
     `<option value="${sp.id}" ${sp.id === selectedId ? "selected" : ""}>${escapeHtml(sp.name)}</option>`).join("");
@@ -363,6 +379,21 @@ function wirePlayerAndSelection(el, id, rec) {
     });
     loadTranscript(id, el);
   }));
+  const idBtn = el.querySelector(".identify");
+  if (idBtn) idBtn.addEventListener("click", async () => {
+    idBtn.disabled = true; idBtn.textContent = "Identifying…";
+    try {
+      const res = await fetch(`/api/recordings/${id}/identify${spkThresholdParam()}`, { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).detail);
+      const r = await res.json();
+      idBtn.textContent = `Tagged ${r.identified}`;
+      loadTranscript(id, el);
+      loadRecordings();
+    } catch (err) {
+      idBtn.textContent = typeof err?.message === "string" ? err.message.slice(0, 40) : "Failed";
+      idBtn.disabled = false;
+    }
+  });
 
   const checked = () => segEls.filter(se => se.querySelector(".seg-sel").checked);
   const rangesOf = (els) => els
@@ -741,16 +772,49 @@ async function loadSpeakers() {
     speakerList.innerHTML = `<span class="muted">No speakers yet. In a transcript, check segments where you recognize a voice and use "Tag as… → + new speaker".</span>`;
     return;
   }
-  speakerList.innerHTML = speakers.map(sp =>
-    `<div class="sp-row"><span class="sp-name">${escapeHtml(sp.name)}</span>` +
-    `<span class="sp-meta">${sp.prints} voiceprint${sp.prints === 1 ? "" : "s"} · ${sp.tags} tagged</span>` +
-    `<button class="chipbtn sp-del" data-id="${sp.id}">Delete</button></div>`).join("");
+  speakerList.innerHTML = speakers.map(sp => {
+    const ready = sp.profile_n ? `profile: ${sp.profile_n}` : `<span style="color:var(--warn)">no profile</span>`;
+    return `<div class="sp-row"><span class="sp-name">${escapeHtml(sp.name)}</span>` +
+      `<span class="sp-meta">${sp.prints} voiceprint${sp.prints === 1 ? "" : "s"} · ${sp.tags} tagged · ${ready}</span>` +
+      `<button class="chipbtn sp-build" data-id="${sp.id}">Build profile</button>` +
+      `<button class="chipbtn sp-del" data-id="${sp.id}">Delete</button></div>`;
+  }).join("");
+  speakerList.querySelectorAll(".sp-build").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true; b.textContent = "…";
+    await fetch(`/api/speakers/${b.dataset.id}/profile`, { method: "POST" });
+    loadSpeakers();
+  }));
   speakerList.querySelectorAll(".sp-del").forEach(b => b.addEventListener("click", async () => {
     if (!confirm("Delete this speaker and all its voiceprints/tags?")) return;
     await fetch(`/api/speakers/${b.dataset.id}`, { method: "DELETE" });
     loadSpeakers();
   }));
 }
+
+document.getElementById("buildProfiles").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  document.getElementById("spkInfo").textContent = "building profiles…";
+  try {
+    const d = await (await fetch("/api/profiles", { method: "POST" })).json();
+    document.getElementById("spkInfo").textContent = `built ${d.profiles_built} profile(s)`;
+    loadSpeakers();
+  } catch { document.getElementById("spkInfo").textContent = "build failed"; }
+  finally { e.target.disabled = false; }
+});
+
+document.getElementById("scanIdentify").addEventListener("click", async (e) => {
+  const onlyNew = document.getElementById("idOnlyNew").checked;
+  const sep = spkThresholdParam() ? "&" : "?";
+  e.target.disabled = true;
+  const info = document.getElementById("spkInfo");
+  info.textContent = "starting scan…";
+  try {
+    const res = await fetch(`/api/identify${spkThresholdParam()}${sep}only_new=${onlyNew}`, { method: "POST" });
+    if (!res.ok) { info.textContent = (await res.json()).detail; return; }
+    info.textContent = "scanning in background — Tags fill in live (watch the log)";
+  } catch { info.textContent = "scan failed"; }
+  finally { setTimeout(() => (e.target.disabled = false), 2000); }
+});
 
 // ---- Free models ----
 const freeBtn = document.getElementById("freeBtn");
