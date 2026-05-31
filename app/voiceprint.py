@@ -81,28 +81,91 @@ def _clip(path: str, start: float, end: float) -> str:
     return tmp
 
 
-def embed(path: str, start: float, end: float) -> np.ndarray:
-    """Return a normalized float32 voiceprint for the given time range."""
+def _clip_array(path: str, start: float, end: float):
+    """One segment as a 16k-mono float32 array via a per-segment ffmpeg clip."""
     import soundfile as sf
-    import torch
-    log.debug("embed: %s [%.2f-%.2f] dur=%.2fs preprocess=%s",
-              os.path.basename(path), start, end, end - start, config.SPK_PREPROCESS)
+    if end - start < 0.3:
+        return None
     tmp = _clip(path, start, end)
     try:
-        # Read with soundfile (libsndfile) — avoids torchaudio's TorchCodec backend.
         sig, _sr = sf.read(tmp, dtype="float32")
-        if sig.ndim > 1:                       # safety; clips are forced mono
+        if sig.ndim > 1:
             sig = sig.mean(axis=1)
-        signal = torch.from_numpy(np.ascontiguousarray(sig)).unsqueeze(0)  # [1, T]
-        emb = _load().encode_batch(signal).squeeze().detach().cpu().numpy().astype("float32")
-        norm = float(np.linalg.norm(emb))
-        log.debug("embed: ok, dim=%d norm=%.3f", emb.shape[0], norm)
-        return emb / norm if norm > 0 else emb
+        return np.ascontiguousarray(sig)
     finally:
         try:
             os.remove(tmp)
         except OSError:
             pass
+
+
+def _decode_full(path: str) -> np.ndarray:
+    """Decode the whole file once to 16k mono float32 (with the clean-audio chain)."""
+    af = (["-af", config.SPK_PREPROCESS_FILTERS]
+          if config.SPK_PREPROCESS and config.SPK_PREPROCESS_FILTERS else [])
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", path,
+           "-ac", "1", "-ar", "16000", *af, "-f", "f32le", "pipe:1"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=1800)
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
+        raise RuntimeError(f"ffmpeg decode failed (rc={proc.returncode}): {' | '.join(tail)}")
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
+def _embed_clips(clips: list) -> list:
+    """Batch a list of (possibly None) 16k-mono arrays through ECAPA on the GPU.
+    Returns normalized embeddings aligned to input (None where the clip was None)."""
+    import torch
+    results = [None] * len(clips)
+    items = [(k, c) for k, c in enumerate(clips) if c is not None and c.shape[0] > 0]
+    if not items:
+        return results
+    model = _load()
+    batch = max(1, config.SPK_BATCH)
+    for b in range(0, len(items), batch):
+        chunk = items[b:b + batch]
+        maxlen = max(c.shape[0] for _, c in chunk)
+        wavs = torch.zeros(len(chunk), maxlen, dtype=torch.float32)
+        lens = torch.ones(len(chunk), dtype=torch.float32)
+        for j, (_k, c) in enumerate(chunk):
+            wavs[j, :c.shape[0]] = torch.from_numpy(c)
+            lens[j] = c.shape[0] / maxlen
+        with torch.no_grad():
+            out = model.encode_batch(wavs, lens)        # [B, 1, D]
+        embs = out.squeeze(1).detach().cpu().numpy().astype("float32")
+        for j, (k, _c) in enumerate(chunk):
+            v = embs[j]
+            nrm = float(np.linalg.norm(v))
+            results[k] = v / nrm if nrm > 0 else v
+    log.debug("embedded %d clip(s) on %s", len(items), config.DEVICE)
+    return results
+
+
+def embed_segments(path: str, ranges: list) -> list:
+    """Embed many segments of one file. Decodes the whole file once when there are
+    enough segments to make that worthwhile, else clips each individually; either way
+    the embeddings are computed in GPU batches. Returns a list aligned to `ranges`."""
+    if not ranges:
+        return []
+    if len(ranges) >= config.SPK_DECODE_ALL_MIN:
+        audio = _decode_full(path)
+        sr = 16000
+        clips = []
+        for s, e in ranges:
+            i0, i1 = max(0, int(s * sr)), int(e * sr)
+            c = audio[i0:i1]
+            clips.append(c if c.shape[0] >= int(0.3 * sr) else None)
+    else:
+        clips = [_clip_array(path, s, e) for s, e in ranges]
+    return _embed_clips(clips)
+
+
+def embed(path: str, start: float, end: float) -> np.ndarray:
+    """Return a normalized float32 voiceprint for one time range."""
+    out = embed_segments(path, [(start, end)])
+    if not out or out[0] is None:
+        raise RuntimeError("clip too short to embed")
+    return out[0]
 
 
 def blob_to_np(b: bytes) -> np.ndarray:

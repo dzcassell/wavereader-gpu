@@ -262,6 +262,7 @@ async def tag(rec_id: int, req: TagReq):
 
     def work():
         enrolled, short, lowq, failed = 0, 0, 0, 0
+        eligible = []   # (seg_index, start, end)
         for i in req.segments:
             if i < 0 or i >= len(segs):
                 continue
@@ -273,22 +274,24 @@ async def tag(rec_id: int, req: TagReq):
                 continue
             if dur < config.MIN_ENROLL_SEC:
                 short += 1
-                log.debug("enroll skip seg=%s: too short (%.2fs < %.1fs)", i, dur, config.MIN_ENROLL_SEC)
                 continue
             lp = s.get("logprob")
             if lp is not None and lp < config.SPK_ENROLL_MIN_LOGPROB:
                 lowq += 1
-                log.debug("enroll skip seg=%s: low quality (logprob %.2f < %.2f)",
-                          i, lp, config.SPK_ENROLL_MIN_LOGPROB)
                 continue
+            eligible.append((i, start, end))
+        if eligible:
             try:
-                emb = voiceprint.embed(path, start, end)
-                db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
-                enrolled += 1
-                log.debug("enroll ok seg=%s dur=%.2fs", i, dur)
+                embs = voiceprint.embed_segments(path, [(s, e) for _i, s, e in eligible])
+                for (i, start, end), emb in zip(eligible, embs):
+                    if emb is None:
+                        failed += 1
+                        continue
+                    db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
+                    enrolled += 1
             except Exception as e:
-                failed += 1
-                log.warning("enroll embed FAILED rec=%s seg=%s dur=%.2fs: %s", rec_id, i, dur, e)
+                failed += len(eligible)
+                log.warning("enroll decode/embed FAILED rec=%s: %s", rec_id, e)
         if enrolled:
             _build_profile(sid)   # keep the speaker's profile current
         return enrolled, short, lowq, failed
@@ -350,7 +353,7 @@ def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
     if not speakers:
         return 0
     tags = db.get_segment_tags(rec_id)
-    n = 0
+    cands = []   # (seg_index, existing_tag) for segments we'll try to identify
     for i, s in enumerate(segs):
         ex = tags.get(i)
         if ex and ex["source"] == "manual":
@@ -360,10 +363,19 @@ def _identify_recording(rec_id: int, threshold: float, overwrite: bool = True,
         start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
         if end - start < config.SPK_ID_MIN_SEC:   # stricter than enrollment
             continue
-        try:
-            emb = voiceprint.embed(rec["path"], start, end)
-        except Exception as e:
-            log.warning("identify embed failed rec=%s seg=%s: %s", rec_id, i, e)
+        cands.append((i, start, end, ex))
+    if not cands:
+        return 0
+    try:
+        embs = voiceprint.embed_segments(rec["path"], [(s, e) for _i, s, e, _ex in cands])
+    except Exception as e:
+        log.warning("identify decode/embed failed rec=%s: %s", rec_id, e)
+        return 0
+    n = 0
+    for (i, _s, _e, ex), emb in zip(cands, embs):
+        if emb is None:
+            if ex and ex["source"] == "auto":
+                db.remove_segment_tag(rec_id, i)
             continue
         ranked = voiceprint.identify(emb, speakers, config.SPK_TOPK)
         if not ranked:
@@ -442,19 +454,28 @@ async def rebuild_voiceprints():
     def work():
         all_vp = list(db.iter_voiceprints())
         log.info("voiceprint rebuild: starting, %d voiceprint(s) to re-embed", len(all_vp))
-        done, failed = 0, 0
+        # Group by recording so each file is decoded once.
+        by_rec: dict = {}
         for vp_id, rid, seg, start, end, path in all_vp:
+            by_rec.setdefault((rid, path), []).append((vp_id, start, end))
+        done, failed = 0, 0
+        for (rid, path), items in by_rec.items():
             if not path or not os.path.exists(path):
-                failed += 1
-                log.warning("re-embed vp=%s rec=%s: source missing (%s)", vp_id, rid, path)
+                failed += len(items)
+                log.warning("re-embed rec=%s: source missing (%s)", rid, path)
                 continue
             try:
-                emb = voiceprint.embed(path, start, end)
+                embs = voiceprint.embed_segments(path, [(s, e) for _vp, s, e in items])
+            except Exception as e:
+                failed += len(items)
+                log.warning("re-embed rec=%s decode/embed failed: %s", rid, e)
+                continue
+            for (vp_id, _s, _e), emb in zip(items, embs):
+                if emb is None:
+                    failed += 1
+                    continue
                 db.update_voiceprint_emb(vp_id, emb.tobytes(), int(emb.shape[0]))
                 done += 1
-            except Exception as e:
-                failed += 1
-                log.warning("re-embed vp=%s rec=%s seg=%s failed: %s", vp_id, rid, seg, e)
         for sp in db.list_speakers():
             _build_profile(sp["id"])
         return done, failed
@@ -480,6 +501,7 @@ async def enroll_tags():
                 continue
             segs = rec.get("segments") or []
             tags = db.get_segment_tags(rid)
+            eligible = []   # (seg_index, speaker_id, start, end)
             for seg_i, t in tags.items():
                 if t["source"] != "manual" or seg_i >= len(segs):
                     continue
@@ -492,15 +514,22 @@ async def enroll_tags():
                 if lp is not None and lp < config.SPK_ENROLL_MIN_LOGPROB:
                     lowq += 1
                     continue
-                try:
-                    emb = voiceprint.embed(rec["path"], start, end)
-                    db.add_voiceprint(t["speaker_id"], rid, seg_i, start, end,
-                                      emb.tobytes(), int(emb.shape[0]))
-                    enrolled += 1
-                    speakers_touched.add(t["speaker_id"])
-                except Exception as e:
+                eligible.append((seg_i, t["speaker_id"], start, end))
+            if not eligible:
+                continue
+            try:
+                embs = voiceprint.embed_segments(rec["path"], [(s, e) for _i, _sp, s, e in eligible])
+            except Exception as e:
+                failed += len(eligible)
+                log.warning("enroll-from-tags decode/embed FAILED rec=%s: %s", rid, e)
+                continue
+            for (seg_i, spk_id, start, end), emb in zip(eligible, embs):
+                if emb is None:
                     failed += 1
-                    log.warning("enroll-from-tags embed FAILED rec=%s seg=%s: %s", rid, seg_i, e)
+                    continue
+                db.add_voiceprint(spk_id, rid, seg_i, start, end, emb.tobytes(), int(emb.shape[0]))
+                enrolled += 1
+                speakers_touched.add(spk_id)
         for sid in speakers_touched:
             _build_profile(sid)
         return enrolled, short, lowq, failed

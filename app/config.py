@@ -58,8 +58,9 @@ SPK_THRESHOLD = float(os.getenv("SPK_THRESHOLD", "0.45"))
 # Must match between enrollment and identification — run "Rebuild voiceprints" after
 # changing these so existing prints are recomputed the same way.
 SPK_PREPROCESS = os.getenv("SPK_PREPROCESS", "true").lower() in ("1", "true", "yes")
-SPK_PREPROCESS_FILTERS = os.getenv("SPK_PREPROCESS_FILTERS",
-                                   "highpass=f=250,lowpass=f=3000,afftdn=nf=-20")
+# Band-pass only by default: length-invariant, so whole-file-decode and per-segment
+# clipping yield identical embeddings (and it's much cheaper than FFT denoise).
+SPK_PREPROCESS_FILTERS = os.getenv("SPK_PREPROCESS_FILTERS", "highpass=f=250,lowpass=f=3000")
 # kNN matching: average the top-K most-similar enrolled prints per speaker.
 SPK_TOPK = int(os.getenv("SPK_TOPK", "3"))
 # A segment must be at least this long to *auto-identify* (stricter than enrollment).
@@ -69,6 +70,11 @@ SPK_MIN_MARGIN = float(os.getenv("SPK_MIN_MARGIN", "0.0"))
 # Skip enrolling a voiceprint from a clip whose Whisper avg_logprob is below this
 # (garbage audio -> garbage print). Set very low to effectively disable.
 SPK_ENROLL_MIN_LOGPROB = float(os.getenv("SPK_ENROLL_MIN_LOGPROB", "-1.5"))
+# How many embeddings to run through the GPU per batch.
+SPK_BATCH = int(os.getenv("SPK_BATCH", "16"))
+# If a file has at least this many segments to embed, decode it once and slice in
+# memory instead of clipping each segment separately.
+SPK_DECODE_ALL_MIN = int(os.getenv("SPK_DECODE_ALL_MIN", "4"))
 
 # --- Logging ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR
