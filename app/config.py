@@ -27,4 +27,13 @@ INITIAL_PROMPT = os.getenv(
 # --- Scanner behavior ---
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "30"))    # seconds between directory scans
 STABLE_SECONDS = int(os.getenv("STABLE_SECONDS", "15"))  # file must be untouched this long before ingest
+# Default for the UI "scan recursively" toggle (persisted in the DB once set).
+SCAN_RECURSIVE_DEFAULT = os.getenv("SCAN_RECURSIVE", "true").lower() in ("1", "true", "yes")
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
+
+# --- Logging ---
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR
+LOG_DIR = os.getenv("LOG_DIR", "/data/logs")
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(5 * 1024 * 1024)))  # 5 MB per file
+LOG_BACKUPS = int(os.getenv("LOG_BACKUPS", "5"))         # rotated files kept
+LOG_BUFFER_LINES = int(os.getenv("LOG_BUFFER_LINES", "2000"))  # in-memory ring for the UI panel

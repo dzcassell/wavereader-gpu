@@ -9,8 +9,9 @@ services:
     env_file:
       - .env
     volumes:
-      # Your IC-7610 transfer directory on the host, read-only. Edit the left side.
-      - ${RECORDINGS_DIR:-/opt/wavereader/recordings}:/data/incoming:ro
+      # Your IC-7610 transfer directory on the host. Read-WRITE so the trash-can
+      # delete can remove files from disk. Edit the left side to your path.
+      - ${RECORDINGS_DIR:-/opt/wavereader/recordings}:/data/incoming
       # Persistent app state: SQLite db, uploaded files, downloaded model weights.
       - wavereader-data:/data
     deploy:

@@ -20,6 +20,11 @@
     <div id="uploadStatus"></div>
   </section>
 
+  <div class="settingsbar">
+    <label class="check"><input type="checkbox" id="recursive"> Scan recursively</label>
+    <span class="muted">Watching: <code id="scanDir">…</code></span>
+  </div>
+
   <div class="searchbar">
     <input type="search" id="search" placeholder="Search filenames and transcripts…" autocomplete="off">
     <span id="searchInfo" class="muted"></span>
@@ -36,6 +41,21 @@
     </thead>
     <tbody id="rows"></tbody>
   </table>
+
+  <section class="logpanel">
+    <div class="loghead">
+      <button id="logToggle" class="chipbtn">▶ Logs</button>
+      <select id="logLevel" class="loglevel" hidden>
+        <option value="">All</option>
+        <option value="DEBUG">Debug+</option>
+        <option value="INFO" selected>Info+</option>
+        <option value="WARNING">Warning+</option>
+        <option value="ERROR">Error only</option>
+      </select>
+      <span id="logInfo" class="muted"></span>
+    </div>
+    <pre id="logOutput" class="logout" hidden></pre>
+  </section>
 
   <script src="/app.js"></script>
 </body>

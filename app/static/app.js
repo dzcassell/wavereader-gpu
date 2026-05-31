@@ -29,6 +29,25 @@ async function loadModels() {
   catch { /* keep defaults */ }
 }
 
+async function deleteRecording(id, name) {
+  if (!confirm(`Delete "${name}" from disk?\n\nThis permanently removes the file from the host. This cannot be undone.`))
+    return;
+  try {
+    const res = await fetch(`/api/recordings/${id}`, { method: "DELETE" });
+    if (!res.ok) { alert(`Delete failed: ${(await res.json()).detail}`); return; }
+    open.delete(id);
+    loadRecordings();
+  } catch { alert("Delete failed."); }
+}
+
+async function loadSettings() {
+  try {
+    const s = await (await fetch("/api/settings")).json();
+    document.getElementById("recursive").checked = !!s.recursive;
+    document.getElementById("scanDir").textContent = s.scan_dir;
+  } catch { /* ignore */ }
+}
+
 async function loadStats() {
   const wrap = document.getElementById("progress");
   let s;
@@ -90,10 +109,17 @@ function renderRow(r) {
     <td class="muted">${r.source}</td>
     <td><span class="badge ${r.status}">${r.status}</span></td>
     <td class="muted">${fmtDur(r.duration)}</td>
-    <td><button class="btn dl">Download</button></td>`;
+    <td><div class="actions">
+      <button class="btn dl">Download</button>
+      <button class="iconbtn trash" title="Delete file from disk">🗑</button>
+    </div></td>`;
   tr.querySelector(".dl").addEventListener("click", (e) => {
     e.stopPropagation();
     window.location = `/api/recordings/${r.id}/download`;
+  });
+  tr.querySelector(".trash").addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteRecording(r.id, r.filename);
   });
   tr.addEventListener("click", () => toggle(r.id));
   return tr;
@@ -251,7 +277,53 @@ freeBtn.addEventListener("click", async () => {
   setTimeout(() => { freeBtn.textContent = "Free models"; freeBtn.disabled = false; }, 1500);
 });
 
+// ---- Recursive setting ----
+document.getElementById("recursive").addEventListener("change", async (e) => {
+  try {
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recursive: e.target.checked }),
+    });
+  } catch { e.target.checked = !e.target.checked; }  // revert on failure
+});
+
+// ---- Log panel ----
+const logToggle = document.getElementById("logToggle");
+const logLevel = document.getElementById("logLevel");
+const logOutput = document.getElementById("logOutput");
+const logInfo = document.getElementById("logInfo");
+let logsOpen = false;
+let logTimer = null;
+
+logToggle.addEventListener("click", () => {
+  logsOpen = !logsOpen;
+  logToggle.textContent = logsOpen ? "▼ Logs" : "▶ Logs";
+  logLevel.hidden = !logsOpen;
+  logOutput.hidden = !logsOpen;
+  if (logsOpen) { loadLogs(); logTimer = setInterval(loadLogs, 3000); }
+  else { clearInterval(logTimer); }
+});
+logLevel.addEventListener("change", loadLogs);
+
+async function loadLogs() {
+  const lvl = logLevel.value;
+  const url = `/api/logs?limit=500${lvl ? `&level=${lvl}` : ""}`;
+  let data;
+  try { data = await (await fetch(url)).json(); }
+  catch { logInfo.textContent = "unreachable"; return; }
+  const lines = data.lines || [];
+  const stick = logOutput.scrollTop + logOutput.clientHeight >= logOutput.scrollHeight - 20;
+  logOutput.innerHTML = lines.map(l => {
+    const t = new Date(l.ts * 1000).toLocaleTimeString();
+    return `<span class="log-${l.level}">${t} ${l.level.padEnd(7)} ${escapeHtml(l.name)}: ${escapeHtml(l.msg)}</span>`;
+  }).join("\n");
+  logInfo.textContent = `${lines.length} lines`;
+  if (stick) logOutput.scrollTop = logOutput.scrollHeight;  // follow tail
+}
+
 loadModels();
+loadSettings();
 loadHealth();
 loadGpu();
 loadRecordings();

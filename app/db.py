@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS recordings (
     UNIQUE(path, size, mtime)
 );
 CREATE INDEX IF NOT EXISTS idx_status ON recordings(status);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 # Columns added after initial release; ALTER on existing databases.
@@ -159,3 +164,18 @@ def requeue(rec_id: int, model: Optional[str] = None, engine: Optional[str] = No
     """Re-queue a recording. model/engine override the config defaults for this job."""
     set_status(rec_id, "pending", error=None, completed_at=None,
                req_model=model, req_engine=engine)
+
+
+def delete_recording(rec_id: int) -> None:
+    _exec("DELETE FROM recordings WHERE id=?", (rec_id,))
+
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    with _lock:
+        row = _conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    _exec("INSERT INTO settings (key, value) VALUES (?, ?) "
+          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))

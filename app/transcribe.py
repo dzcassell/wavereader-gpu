@@ -10,10 +10,14 @@ Models are loaded on demand and cached by (engine, model) so a recording can be
 re-transcribed with a different model without disturbing the default. Each cached
 model holds VRAM until the process restarts.
 """
+import logging
 import threading
+import time
 from typing import Optional
 
 from . import config
+
+log = logging.getLogger("wavereader.transcribe")
 
 # Models the UI offers for re-transcription.
 AVAILABLE_MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
@@ -57,12 +61,19 @@ def _get_model(engine: str, model: str):
     key = (engine, model)
     with _cache_lock:
         if key not in _cache:
+            log.info("loading model engine=%s model=%s compute=%s device=%s ...",
+                     engine, model, config.COMPUTE_TYPE, config.DEVICE)
+            t0 = time.monotonic()
             if engine == "faster_whisper":
                 _cache[key] = _build_faster_whisper(model)
             elif engine == "transformers":
                 _cache[key] = _build_transformers(model)
             else:
                 raise ValueError(f"Unknown WHISPER_ENGINE: {engine}")
+            log.info("loaded %s:%s in %.1fs (%s)",
+                     engine, model, time.monotonic() - t0, _gpu_summary())
+        else:
+            log.debug("model cache hit: %s:%s", engine, model)
         return _cache[key]
 
 
@@ -92,6 +103,7 @@ def free_models() -> list[str]:
             torch.cuda.empty_cache()
     except Exception:
         pass
+    log.info("freed %d model(s) from cache: %s", len(freed), ", ".join(freed) or "none")
     return freed
 
 
