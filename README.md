@@ -39,6 +39,7 @@ docker compose logs -f        # watch for "model loaded: ... cuda: NVIDIA GeForc
 ```
 
 Open <http://HOST_IP:8080>. The header chip shows the live engine/GPU status.
+(If 8080 is taken by another container, set `WEB_PORT` in `.env` to a free port.)
 
 > First start downloads the `large-v3` weights (~3 GB) into the `wavereader-data`
 > volume; subsequent starts are fast.
