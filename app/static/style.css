@@ -109,6 +109,43 @@ mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .
   padding: .4rem .6rem; margin-bottom: .6rem;
 }
 .selinfo { color: var(--text); font-size: .85rem; margin-right: auto; }
+
+/* Entity chips inside a transcript */
+.entities { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
+.chip {
+  border: 1px solid var(--border); border-radius: 999px; padding: .12rem .55rem;
+  font-size: .8rem; cursor: pointer; background: var(--panel); color: var(--text);
+}
+.chip:hover { border-color: var(--accent); }
+.chip.ent-callsign { border-color: var(--accent); color: var(--accent); }
+.chip.ent-qcode { border-color: var(--ok); color: var(--ok); }
+.chip.ent-frequency { border-color: #b08cff; color: #b08cff; }
+.alert-badge { margin-left: .4rem; }
+
+/* Heard & alerts panel */
+.heardpanel { margin: 0 1.5rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 1rem; }
+.heardcols { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+.heardcol { flex: 1 1 320px; min-width: 280px; }
+.heard-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; flex-wrap: wrap; }
+.entlist { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: .25rem; }
+.ent-row { display: flex; align-items: center; gap: .5rem; padding: .25rem .4rem; border-radius: 6px; }
+.ent-row:hover { background: #1d2129; }
+.ent-val { font-weight: 600; }
+.ent-count { color: var(--muted); font-size: .8rem; }
+.ent-occ { color: var(--accent); cursor: pointer; font-size: .78rem; }
+.ent-occ:hover { text-decoration: underline; }
+.watchbox {
+  width: 100%; min-height: 110px; background: #0b0d11; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: .6rem; font: 13px/1.5 ui-monospace, monospace; resize: vertical;
+}
+
+/* Cross-file search results */
+.searchresults { margin: 0 1.5rem 1rem; display: flex; flex-direction: column; gap: .2rem; max-height: 320px; overflow: auto; }
+.sr-hit { display: flex; gap: .6rem; padding: .3rem .5rem; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; align-items: baseline; }
+.sr-hit:hover { border-color: var(--accent); background: #1d2129; }
+.sr-file { color: var(--muted); flex: 0 0 auto; font-size: .8rem; }
+.sr-time { color: var(--accent); font-variant-numeric: tabular-nums; flex: 0 0 3.2rem; }
+.sr-text { flex: 1; }
 .empty, .err-msg { color: var(--muted); padding: .5rem 0; }
 .err-msg { color: var(--err); }
 .logpanel { margin: 0 1.5rem 2rem; }

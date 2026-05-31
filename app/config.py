@@ -43,6 +43,9 @@ STABLE_SECONDS = int(os.getenv("STABLE_SECONDS", "15"))  # file must be untouche
 SCAN_RECURSIVE_DEFAULT = os.getenv("SCAN_RECURSIVE", "true").lower() in ("1", "true", "yes")
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 
+# Optional: POST {id, file, matched} here when a transcript hits a watch term.
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+
 # --- Logging ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR
 LOG_DIR = os.getenv("LOG_DIR", "/data/logs")

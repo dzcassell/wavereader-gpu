@@ -10,6 +10,7 @@
   <header>
     <h1>📻 wavereader-gpu</h1>
     <span id="gpu" class="health" title="GPU telemetry">GPU …</span>
+    <button id="heardBtn" class="chipbtn" title="Callsigns / Q-codes / frequencies heard, and watch terms">Heard &amp; alerts</button>
     <button id="freeBtn" class="chipbtn" title="Release all cached models from VRAM">Free models</button>
     <span id="health" class="health" title="transcription engine status">…</span>
   </header>
@@ -22,13 +23,44 @@
 
   <div class="settingsbar">
     <label class="check"><input type="checkbox" id="recursive"> Scan recursively</label>
+    <label class="check"><input type="checkbox" id="alertsOnly"> 🔔 alerts only</label>
     <span class="muted">Watching: <code id="scanDir">…</code></span>
   </div>
+
+  <section class="heardpanel" id="heardpanel" hidden>
+    <div class="heardcols">
+      <div class="heardcol">
+        <div class="heard-head">
+          <strong>Heard</strong>
+          <select id="entType" class="loglevel">
+            <option value="all">All</option>
+            <option value="callsign">Callsigns</option>
+            <option value="qcode">Q-codes</option>
+            <option value="frequency">Frequencies</option>
+          </select>
+          <button id="entRefresh" class="chipbtn">Refresh</button>
+        </div>
+        <div id="entList" class="entlist"></div>
+      </div>
+      <div class="heardcol">
+        <div class="heard-head"><strong>Watch terms</strong>
+          <span class="muted">one per line — flags matching transcripts 🔔</span></div>
+        <textarea id="watchTerms" class="watchbox" placeholder="W1AW&#10;mayday&#10;14.205"></textarea>
+        <div class="heard-head">
+          <button id="watchSave" class="chipbtn">Save terms</button>
+          <button id="reindexBtn" class="chipbtn" title="Recompute entities + alerts for all transcripts">Re-index all</button>
+          <span id="watchInfo" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <div class="searchbar">
     <input type="search" id="search" placeholder="Search filenames and transcripts…" autocomplete="off">
     <span id="searchInfo" class="muted"></span>
   </div>
+
+  <div class="searchresults" id="searchResults" hidden></div>
 
   <div class="progress" id="progress" hidden>
     <div class="pbar"><div class="pfill" id="pfill"></div></div>

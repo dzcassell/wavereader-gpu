@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import config, db, gpu, logging_setup, transcribe, worker
+from . import config, db, entities, gpu, logging_setup, transcribe, worker
 
 log = logging.getLogger("wavereader.api")
 
@@ -35,6 +35,10 @@ class SettingsReq(BaseModel):
 
 class ClipReq(BaseModel):
     ranges: list[tuple[float, float]]
+
+
+class WatchReq(BaseModel):
+    terms: list[str]
 
 _GPU_STATUS = "not loaded"
 
@@ -131,8 +135,67 @@ async def logs(limit: int = 300, level: str | None = None):
 
 
 @app.get("/api/recordings")
-async def recordings(q: str | None = None):
-    return db.list_recordings(q)
+async def recordings(q: str | None = None, alerts_only: bool = False):
+    return db.list_recordings(q, alerts_only)
+
+
+@app.get("/api/entities")
+async def entities_index(type: str | None = None, limit: int = 500):
+    """Aggregate 'heard' index: distinct callsigns/Q-codes/frequencies with counts
+    and the recordings/timestamps where each was heard."""
+    agg: dict = {}
+    for rid, fname, ents in db.iter_entities():
+        for e in ents:
+            if type and type != "all" and e["type"] != type:
+                continue
+            d = agg.setdefault((e["type"], e["value"]),
+                               {"type": e["type"], "value": e["value"], "count": 0, "occurrences": []})
+            d["count"] += 1
+            if len(d["occurrences"]) < 100:
+                d["occurrences"].append({"id": rid, "filename": fname, "start": e["start"]})
+    items = sorted(agg.values(), key=lambda x: (-x["count"], x["value"]))[:limit]
+    return {"entities": items}
+
+
+@app.get("/api/search")
+async def search(q: str, limit: int = 200):
+    if not q.strip():
+        return {"hits": []}
+    hits = await asyncio.to_thread(db.search_segments, q.strip(), limit)
+    return {"hits": hits}
+
+
+@app.get("/api/watch")
+async def get_watch():
+    raw = db.get_setting("watch_terms", "") or ""
+    return {"terms": [t.strip() for t in raw.splitlines() if t.strip()]}
+
+
+@app.post("/api/watch")
+async def set_watch(req: WatchReq):
+    terms = [t.strip() for t in req.terms if t.strip()]
+    db.set_setting("watch_terms", "\n".join(terms))
+    log.info("watch terms updated: %d term(s)", len(terms))
+    return {"terms": terms}
+
+
+@app.post("/api/reindex")
+async def reindex():
+    """Recompute entities + alerts for every transcribed recording (e.g. after
+    changing watch terms, or to backfill transcripts made before this feature)."""
+    terms = (await get_watch())["terms"]
+
+    def run():
+        n = 0
+        for rid, _fname, segs, text in db.iter_done_segments():
+            ents = entities.extract(segs)
+            db.set_entities(rid, ents, entities.match_terms(text, ents, terms))
+            n += 1
+        return n
+
+    count = await asyncio.to_thread(run)
+    log.info("reindex complete: %d recordings", count)
+    return {"reindexed": count}
 
 
 @app.get("/api/recordings/{rec_id}")

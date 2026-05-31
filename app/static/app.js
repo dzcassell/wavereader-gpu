@@ -6,6 +6,8 @@ let rowCache = {};               // id -> recording summary
 const rowEls = new Map();        // id -> { row, tr }  live DOM nodes for incremental updates
 let lastOrder = "";              // last rendered id order, to skip needless reordering
 let currentQuery = "";           // active search term
+let alertsOnly = false;          // filter: only recordings that hit a watch term
+const pendingSeek = {};          // id -> seconds to seek once its player is wired
 let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
 let appSettings = { default_preprocess: false, default_vad: true };
 
@@ -84,8 +86,11 @@ async function loadGpu() {
 
 async function loadRecordings() {
   let recs;
-  const url = currentQuery ? `/api/recordings?q=${encodeURIComponent(currentQuery)}` : "/api/recordings";
-  try { recs = await (await fetch(url)).json(); }
+  const params = new URLSearchParams();
+  if (currentQuery) params.set("q", currentQuery);
+  if (alertsOnly) params.set("alerts_only", "true");
+  const qs = params.toString();
+  try { recs = await (await fetch("/api/recordings" + (qs ? "?" + qs : ""))).json(); }
   catch { return; }
   document.getElementById("searchInfo").textContent =
     currentQuery ? `${recs.length} match${recs.length === 1 ? "" : "es"}` : "";
@@ -146,6 +151,10 @@ async function loadRecordings() {
   }
 }
 
+function alertMark(r) {
+  return (r.alerts && r.alerts.length) ? "🔔" : "";
+}
+
 function updateRow(row, r) {
   row.querySelector(".caret").classList.toggle("open", open.has(r.id));
   const badge = row.querySelector(".badge");
@@ -156,6 +165,9 @@ function updateRow(row, r) {
   const dur = fmtDur(r.duration);
   const durCell = row.querySelector(".dur");
   if (durCell.textContent !== dur) durCell.textContent = dur;
+  const ab = row.querySelector(".alert-badge");
+  const mark = alertMark(r);
+  if (ab.textContent !== mark) ab.textContent = mark;
 }
 
 function renderRow(r) {
@@ -165,7 +177,7 @@ function renderRow(r) {
   const caretOpen = open.has(r.id) ? "open" : "";
   tr.innerHTML = `
     <td><span class="caret ${caretOpen}">▶</span></td>
-    <td>${escapeHtml(r.filename)}</td>
+    <td>${escapeHtml(r.filename)}<span class="alert-badge" title="matched a watch term">${alertMark(r)}</span></td>
     <td class="muted">${r.source}</td>
     <td><span class="badge ${r.status}">${r.status}</span></td>
     <td class="muted dur">${fmtDur(r.duration)}</td>
@@ -227,6 +239,7 @@ async function loadTranscript(id, el) {
     parts.push(`<div class="empty">No speech detected.</div>`);
   } else {
     parts.push(`<audio class="player" controls preload="none" src="/api/recordings/${id}/audio"></audio>`);
+    if (rec.entities && rec.entities.length) parts.push(entityChips(rec.entities));
     parts.push(`<div class="tbar">
       <button class="btn copy">Copy text</button>
       <a class="btn" href="/api/recordings/${id}/export?fmt=txt">.txt</a>
@@ -271,12 +284,34 @@ async function loadTranscript(id, el) {
   wireRetranscribe(el, id);
 }
 
+function entityChips(entities) {
+  const byVal = new Map();   // dedupe by value, keep earliest occurrence
+  for (const e of entities) {
+    const cur = byVal.get(e.value);
+    if (!cur || e.start < cur.start) byVal.set(e.value, e);
+  }
+  const chips = [...byVal.values()]
+    .sort((a, b) => a.start - b.start)
+    .map(e => `<button class="chip ent-${e.type}" data-start="${e.start}" title="${e.type} @ ${fmtTs(e.start)}">${escapeHtml(e.value)}</button>`)
+    .join("");
+  return `<div class="entities">${chips}</div>`;
+}
+
+function seekTo(player, s) {
+  const go = () => { try { player.currentTime = s; } catch (_) {} player.play(); };
+  if (player.readyState >= 1) go();
+  else { player.addEventListener("loadedmetadata", go, { once: true }); player.load(); }
+}
+
 function wirePlayerAndSelection(el, id, rec) {
   const player = el.querySelector(".player");
   const segEls = [...el.querySelectorAll(".seg")];
   const selbar = el.querySelector(".selbar");
   const stem = (rec.filename || "clip").replace(/\.[^.]+$/, "");
   let clipQueue = null, clipIdx = 0;   // for "Play selection"
+
+  el.querySelectorAll(".chip").forEach(c =>
+    c.addEventListener("click", () => { clipQueue = null; seekTo(player, parseFloat(c.dataset.start)); }));
 
   const checked = () => segEls.filter(se => se.querySelector(".seg-sel").checked);
   const rangesOf = (els) => els
@@ -297,8 +332,7 @@ function wirePlayerAndSelection(el, id, rec) {
   segEls.forEach(se => {
     se.querySelector(".ts").addEventListener("click", () => {
       clipQueue = null;
-      player.currentTime = parseFloat(se.dataset.start);
-      player.play();
+      seekTo(player, parseFloat(se.dataset.start));
     });
     se.querySelector(".seg-sel").addEventListener("change", updateSelbar);
   });
@@ -333,8 +367,7 @@ function wirePlayerAndSelection(el, id, rec) {
     const r = rangesOf(checked());
     if (!r.length) return;
     clipQueue = r; clipIdx = 0;
-    player.currentTime = r[0][0];
-    player.play();
+    seekTo(player, r[0][0]);
   });
   el.querySelector(".sel-copy").addEventListener("click", (e) => {
     const txt = checked().map(se => rec.segments[+se.dataset.i].text).join("\n");
@@ -367,6 +400,34 @@ function wirePlayerAndSelection(el, id, rec) {
       e.target.disabled = false;
     }
   });
+
+  // If we were asked to jump here (from the Heard index or search results), do it now.
+  if (pendingSeek[id] != null) {
+    const s = pendingSeek[id];
+    delete pendingSeek[id];
+    seekTo(player, s);
+  }
+}
+
+async function openAndPlay(id, start) {
+  if (!rowEls.has(id)) {
+    // Row may be hidden by an active filter — clear filters so it exists, then retry.
+    currentQuery = ""; alertsOnly = false;
+    const search = document.getElementById("search");
+    if (search) search.value = "";
+    document.getElementById("alertsOnly").checked = false;
+    await loadRecordings();
+  }
+  const e = rowEls.get(id);
+  if (!e) return;
+  e.row.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (!open.has(id)) {
+    pendingSeek[id] = start;
+    toggle(id);                      // opens + async-loads transcript, which consumes pendingSeek
+  } else if (e.tr) {
+    const p = e.tr.querySelector(".player");
+    if (p) seekTo(p, start); else pendingSeek[id] = start;
+  }
 }
 
 function downloadBlob(blob, name) {
@@ -467,13 +528,102 @@ async function uploadFiles(files) {
 
 // ---- Search ----
 const searchEl = document.getElementById("search");
+const searchResults = document.getElementById("searchResults");
 let searchTimer = null;
 searchEl.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     currentQuery = searchEl.value.trim();
     loadRecordings();
+    loadSearchResults();
   }, 250);
+});
+
+async function loadSearchResults() {
+  if (!currentQuery) { searchResults.hidden = true; searchResults.innerHTML = ""; return; }
+  let data;
+  try { data = await (await fetch(`/api/search?q=${encodeURIComponent(currentQuery)}&limit=100`)).json(); }
+  catch { return; }
+  const hits = data.hits || [];
+  if (!hits.length) { searchResults.hidden = true; searchResults.innerHTML = ""; return; }
+  searchResults.hidden = false;
+  searchResults.innerHTML = hits.map(h =>
+    `<div class="sr-hit" data-id="${h.id}" data-start="${h.start}">` +
+    `<span class="sr-time">${fmtTs(h.start)}</span>` +
+    `<span class="sr-file">${escapeHtml(h.filename)}</span>` +
+    `<span class="sr-text">${highlight(h.text)}</span></div>`).join("");
+  searchResults.querySelectorAll(".sr-hit").forEach(el =>
+    el.addEventListener("click", () => openAndPlay(+el.dataset.id, parseFloat(el.dataset.start))));
+}
+
+// ---- Alerts-only filter ----
+document.getElementById("alertsOnly").addEventListener("change", (e) => {
+  alertsOnly = e.target.checked;
+  loadRecordings();
+});
+
+// ---- Heard & alerts panel ----
+const heardBtn = document.getElementById("heardBtn");
+const heardPanel = document.getElementById("heardpanel");
+const entType = document.getElementById("entType");
+const entList = document.getElementById("entList");
+const watchBox = document.getElementById("watchTerms");
+const watchInfo = document.getElementById("watchInfo");
+
+heardBtn.addEventListener("click", () => {
+  heardPanel.hidden = !heardPanel.hidden;
+  if (!heardPanel.hidden) { loadEntities(); loadWatch(); }
+});
+entType.addEventListener("change", loadEntities);
+document.getElementById("entRefresh").addEventListener("click", loadEntities);
+
+async function loadEntities() {
+  entList.innerHTML = `<span class="muted">loading…</span>`;
+  let data;
+  try { data = await (await fetch(`/api/entities?type=${entType.value}&limit=400`)).json(); }
+  catch { entList.innerHTML = `<span class="muted">unreachable</span>`; return; }
+  const ents = data.entities || [];
+  if (!ents.length) { entList.innerHTML = `<span class="muted">nothing detected yet — try "Re-index all"</span>`; return; }
+  entList.innerHTML = ents.map(e => {
+    const occ = e.occurrences[0];
+    return `<div class="ent-row">` +
+      `<span class="ent-val chip ent-${e.type}" data-id="${occ.id}" data-start="${occ.start}">${escapeHtml(e.value)}</span>` +
+      `<span class="ent-count">×${e.count}</span>` +
+      `<span class="ent-occ" data-id="${occ.id}" data-start="${occ.start}">play first ▶</span></div>`;
+  }).join("");
+  entList.querySelectorAll("[data-id]").forEach(el =>
+    el.addEventListener("click", () => openAndPlay(+el.dataset.id, parseFloat(el.dataset.start))));
+}
+
+async function loadWatch() {
+  try {
+    const d = await (await fetch("/api/watch")).json();
+    watchBox.value = (d.terms || []).join("\n");
+  } catch { /* ignore */ }
+}
+
+document.getElementById("watchSave").addEventListener("click", async () => {
+  const terms = watchBox.value.split("\n").map(t => t.trim()).filter(Boolean);
+  watchInfo.textContent = "saving…";
+  try {
+    const d = await (await fetch("/api/watch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ terms }),
+    })).json();
+    watchInfo.textContent = `${d.terms.length} term(s) saved — Re-index to apply to existing files`;
+  } catch { watchInfo.textContent = "save failed"; }
+});
+
+document.getElementById("reindexBtn").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  watchInfo.textContent = "re-indexing all transcripts…";
+  try {
+    const d = await (await fetch("/api/reindex", { method: "POST" })).json();
+    watchInfo.textContent = `re-indexed ${d.reindexed} recording(s)`;
+    loadEntities();
+    loadRecordings();
+  } catch { watchInfo.textContent = "re-index failed"; }
+  finally { e.target.disabled = false; }
 });
 
 // ---- Free models ----

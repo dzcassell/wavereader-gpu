@@ -46,6 +46,8 @@ _MIGRATIONS = [
     ("req_engine", "ALTER TABLE recordings ADD COLUMN req_engine TEXT"),
     ("req_preprocess", "ALTER TABLE recordings ADD COLUMN req_preprocess INTEGER"),
     ("req_vad", "ALTER TABLE recordings ADD COLUMN req_vad INTEGER"),
+    ("entities_json", "ALTER TABLE recordings ADD COLUMN entities_json TEXT"),
+    ("alerts", "ALTER TABLE recordings ADD COLUMN alerts TEXT"),
 ]
 
 
@@ -101,11 +103,14 @@ def set_status(rec_id: int, status: str, **fields: Any) -> None:
 
 
 def save_transcript(rec_id: int, text: str, segments: list, duration: float,
-                    language: str, model: str, engine: str) -> None:
+                    language: str, model: str, engine: str,
+                    entities: Optional[list] = None, alerts: Optional[list] = None) -> None:
     set_status(
         rec_id, "done",
         text=text,
         segments_json=json.dumps(segments),
+        entities_json=json.dumps(entities or []),
+        alerts=json.dumps(alerts or []),
         duration=duration,
         language=language,
         model=model,
@@ -115,25 +120,78 @@ def save_transcript(rec_id: int, text: str, segments: list, duration: float,
     )
 
 
+def set_entities(rec_id: int, entities: list, alerts: list) -> None:
+    """Backfill entities/alerts on an already-transcribed recording."""
+    _exec("UPDATE recordings SET entities_json=?, alerts=? WHERE id=?",
+          (json.dumps(entities), json.dumps(alerts), rec_id))
+
+
+def iter_done_segments():
+    """Yield (id, filename, segments, text) for every transcribed recording. For backfill."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, filename, segments_json, text FROM recordings WHERE status='done'"
+        ).fetchall()
+    for r in rows:
+        yield r["id"], r["filename"], json.loads(r["segments_json"] or "[]"), (r["text"] or "")
+
+
+def iter_entities():
+    """Yield (id, filename, entities) for recordings that have entities."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, filename, entities_json FROM recordings "
+            "WHERE entities_json IS NOT NULL AND entities_json != '[]'"
+        ).fetchall()
+    for r in rows:
+        yield r["id"], r["filename"], json.loads(r["entities_json"] or "[]")
+
+
+def search_segments(query: str, limit: int = 200) -> list[dict]:
+    """Segment-level hits across all transcripts: pre-filter files by text, then
+    return the individual matching segments with timestamps."""
+    like = f"%{query}%"
+    with _lock:
+        rows = _conn.execute(
+            "SELECT id, filename, segments_json FROM recordings "
+            "WHERE status='done' AND text LIKE ? ORDER BY created_at DESC", (like,)
+        ).fetchall()
+    q = query.lower()
+    out = []
+    for r in rows:
+        for seg in json.loads(r["segments_json"] or "[]"):
+            if q in (seg.get("text", "") or "").lower():
+                out.append({"id": r["id"], "filename": r["filename"],
+                            "start": seg.get("start", 0), "text": seg.get("text", "")})
+                if len(out) >= limit:
+                    return out
+    return out
+
+
 _LIST_COLS = ("id, filename, source, size, status, duration, language, model, "
-              "created_at, completed_at, error")
+              "created_at, completed_at, error, alerts")
 
 
-def list_recordings(query: Optional[str] = None) -> list[dict]:
+def list_recordings(query: Optional[str] = None, alerts_only: bool = False) -> list[dict]:
+    where, params = [], []
     if query:
         like = f"%{query}%"
-        with _lock:
-            rows = _conn.execute(
-                f"SELECT {_LIST_COLS} FROM recordings "
-                "WHERE filename LIKE ? OR text LIKE ? ORDER BY created_at DESC",
-                (like, like),
-            ).fetchall()
-    else:
-        with _lock:
-            rows = _conn.execute(
-                f"SELECT {_LIST_COLS} FROM recordings ORDER BY created_at DESC"
-            ).fetchall()
-    return [dict(r) for r in rows]
+        where.append("(filename LIKE ? OR text LIKE ?)")
+        params += [like, like]
+    if alerts_only:
+        where.append("alerts IS NOT NULL AND alerts != '[]' AND alerts != ''")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with _lock:
+        rows = _conn.execute(
+            f"SELECT {_LIST_COLS} FROM recordings{clause} ORDER BY created_at DESC",
+            tuple(params),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["alerts"] = json.loads(d["alerts"]) if d.get("alerts") else []
+        out.append(d)
+    return out
 
 
 def get_recording(rec_id: int) -> Optional[dict]:
@@ -143,6 +201,8 @@ def get_recording(rec_id: int) -> Optional[dict]:
         return None
     d = dict(row)
     d["segments"] = json.loads(d.pop("segments_json") or "[]")
+    d["entities"] = json.loads(d.pop("entities_json", None) or "[]")
+    d["alerts"] = json.loads(d["alerts"]) if d.get("alerts") else []
     return d
 
 

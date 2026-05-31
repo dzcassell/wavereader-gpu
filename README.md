@@ -87,7 +87,11 @@ the GPU name) rather than silently falling back to CPU.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/recordings` | list all recordings + status (`?q=` full-text search over filenames + transcripts) |
+| GET | `/api/recordings` | list recordings (`?q=` search; `?alerts_only=true` only watch-term hits) |
+| GET | `/api/entities` | aggregated "heard" index (`?type=callsign\|qcode\|frequency`) |
+| GET | `/api/search?q=` | cross-file segment hits with timestamps for jump-to-play |
+| GET / POST | `/api/watch` | get/set keyword & callsign watch terms |
+| POST | `/api/reindex` | recompute entities + alerts for all transcripts (backfill) |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
 | GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |
@@ -118,6 +122,25 @@ The header has a **Free models** button that drops every cached model and releas
 VRAM in one click (the GPU chip beside it shows the memory drop). The backlog
 **progress bar** under the search box shows how much of the on-disk queue has been
 transcribed, plus what is still queued or errored.
+
+## Find & monitor
+
+- **Entities** — callsigns (both literal like `W1AW` and reconstructed from spoken
+  phonetics like "whiskey one alpha whiskey"), Q-codes, and frequencies are pulled
+  from each transcript and shown as clickable chips that jump the player to where
+  they were said.
+- **Heard index** (header → **Heard & alerts**) — every distinct callsign / Q-code /
+  frequency across the whole archive, with counts; click to open the file and play
+  at that moment.
+- **Cross-file search** — typing in the search box also lists matching segments from
+  every file with timestamps; click a hit to jump straight to that audio.
+- **Watch terms / alerts** — enter keywords or callsigns to watch; matching
+  transcripts get a 🔔 badge (filter with **🔔 alerts only**), and if `WEBHOOK_URL`
+  is set, a JSON `{id, file, matched}` is POSTed on each hit. **Re-index all**
+  recomputes entities + alerts across existing transcripts.
+
+> Entities/alerts are computed for everything transcribed from now on. For files
+> transcribed before this feature, click **Re-index all** once to backfill them.
 
 ## Playback & clipping
 

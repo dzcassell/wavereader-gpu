@@ -5,12 +5,14 @@ never blocks the event loop / HTTP server. Only one file transcribes at a time
 because the GPU is the bottleneck.
 """
 import asyncio
+import json
 import logging
 import os
 import time
 import traceback
+import urllib.request
 
-from . import config, db, transcribe
+from . import config, db, entities, transcribe
 
 log = logging.getLogger("wavereader.worker")
 scanlog = logging.getLogger("wavereader.scanner")
@@ -18,6 +20,23 @@ scanlog = logging.getLogger("wavereader.scanner")
 
 def _recursive_enabled() -> bool:
     return db.get_setting("recursive", "1" if config.SCAN_RECURSIVE_DEFAULT else "0") == "1"
+
+
+def _watch_terms() -> list[str]:
+    raw = db.get_setting("watch_terms", "") or ""
+    return [t.strip() for t in raw.splitlines() if t.strip()]
+
+
+def _fire_webhook(rec_id: int, filename: str, alerts: list[str]) -> None:
+    if not config.WEBHOOK_URL:
+        return
+    try:
+        body = json.dumps({"id": rec_id, "file": filename, "matched": alerts}).encode()
+        req = urllib.request.Request(config.WEBHOOK_URL, data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=10).close()
+    except Exception as e:
+        log.warning("webhook failed: %s", e)
 
 
 async def scanner_loop() -> None:
@@ -99,12 +118,20 @@ async def worker_loop() -> None:
             elapsed = time.monotonic() - t0
             dur = result["duration"] or 0
             rtf = (dur / elapsed) if elapsed > 0 else 0
+            ents = entities.extract(result["segments"])
+            terms = _watch_terms()
+            alerts = entities.match_terms(result["text"], ents, terms)
             db.save_transcript(
                 rec_id, result["text"], result["segments"], result["duration"],
                 result["language"], result["model"], result["engine"],
+                entities=ents, alerts=alerts,
             )
-            log.info("done id=%s: %d segments, audio=%.1fs in %.1fs (%.1fx realtime)",
-                     rec_id, len(result["segments"]), dur, elapsed, rtf)
+            log.info("done id=%s: %d segments, %d entities, audio=%.1fs in %.1fs (%.1fx realtime)",
+                     rec_id, len(result["segments"]), len(ents), dur, elapsed, rtf)
+            if alerts:
+                log.info("ALERT id=%s %s matched watch terms: %s",
+                         rec_id, row["filename"], ", ".join(alerts))
+                _fire_webhook(rec_id, row["filename"], alerts)
         except Exception as e:
             log.error("FAILED id=%s after %.1fs: %s\n%s",
                       rec_id, time.monotonic() - t0, e, traceback.format_exc())
