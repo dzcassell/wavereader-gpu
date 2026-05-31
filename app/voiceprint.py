@@ -68,9 +68,11 @@ def _clip(path: str, start: float, end: float) -> str:
     os.close(fd)
     af = (["-af", config.SPK_PREPROCESS_FILTERS]
           if config.SPK_PREPROCESS and config.SPK_PREPROCESS_FILTERS else [])
-    cmd = ["ffmpeg", "-nostdin", "-y", "-i", path,
-           "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
-           "-ac", "1", "-ar", "16000", *af, tmp]
+    dur = max(0.0, end - start)
+    # Input seeking (-ss before -i) jumps straight to the segment instead of
+    # decoding the whole file up to it — orders of magnitude faster on long files.
+    cmd = ["ffmpeg", "-nostdin", "-y", "-ss", f"{start:.3f}", "-i", path,
+           "-t", f"{dur:.3f}", "-ac", "1", "-ar", "16000", *af, tmp]
     proc = subprocess.run(cmd, capture_output=True, timeout=120)
     if proc.returncode != 0:
         os.remove(tmp)
