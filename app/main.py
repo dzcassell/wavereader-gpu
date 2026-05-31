@@ -19,6 +19,8 @@ log = logging.getLogger("wavereader.api")
 class RetranscribeReq(BaseModel):
     model: str | None = None
     engine: str | None = None
+    preprocess: bool | None = None
+    vad: bool | None = None
 
 
 class SettingsReq(BaseModel):
@@ -96,7 +98,12 @@ def _recursive_enabled() -> bool:
 
 @app.get("/api/settings")
 async def get_settings():
-    return {"scan_dir": config.SCAN_DIR, "recursive": _recursive_enabled()}
+    return {
+        "scan_dir": config.SCAN_DIR,
+        "recursive": _recursive_enabled(),
+        "default_preprocess": config.PREPROCESS,
+        "default_vad": config.VAD,
+    }
 
 
 @app.post("/api/settings")
@@ -225,13 +232,16 @@ async def retranscribe(rec_id: int, req: RetranscribeReq | None = None):
         raise HTTPException(404, "not found")
     model = req.model if req else None
     engine = req.engine if req else None
+    preprocess = req.preprocess if req else None
+    vad = req.vad if req else None
     if model and model not in transcribe.AVAILABLE_MODELS:
         raise HTTPException(400, f"unknown model {model}")
     if engine and engine not in transcribe.AVAILABLE_ENGINES:
         raise HTTPException(400, f"unknown engine {engine}")
-    db.requeue(rec_id, model=model, engine=engine)
-    log.info("re-queued id=%s (model=%s engine=%s)",
-             rec_id, model or config.WHISPER_MODEL, engine or config.WHISPER_ENGINE)
+    db.requeue(rec_id, model=model, engine=engine, preprocess=preprocess, vad=vad)
+    log.info("re-queued id=%s (model=%s engine=%s preprocess=%s vad=%s)",
+             rec_id, model or config.WHISPER_MODEL, engine or config.WHISPER_ENGINE,
+             preprocess, vad)
     return {"status": "queued", "model": model or config.WHISPER_MODEL,
             "engine": engine or config.WHISPER_ENGINE}
 

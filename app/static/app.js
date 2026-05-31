@@ -7,6 +7,7 @@ const rowEls = new Map();        // id -> { row, tr }  live DOM nodes for increm
 let lastOrder = "";              // last rendered id order, to skip needless reordering
 let currentQuery = "";           // active search term
 let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
+let appSettings = { default_preprocess: false, default_vad: true };
 
 function fmtDur(s) {
   if (!s && s !== 0) return "—";
@@ -45,6 +46,7 @@ async function deleteRecording(id, name) {
 async function loadSettings() {
   try {
     const s = await (await fetch("/api/settings")).json();
+    appSettings = s;
     document.getElementById("recursive").checked = !!s.recursive;
     document.getElementById("scanDir").textContent = s.scan_dir;
   } catch { /* ignore */ }
@@ -229,9 +231,14 @@ async function loadTranscript(id, el) {
       <a class="btn" href="/api/recordings/${id}/export?fmt=srt">.srt</a>
       <a class="btn" href="/api/recordings/${id}/export?fmt=vtt">.vtt</a>`;
     parts.push(`<div class="tbar">${exportBtns}</div>`);
-    parts.push(rec.segments.map(s =>
-      `<div class="seg"><span class="ts">${fmtTs(s.start)}</span><span class="tx">${highlight(s.text)}</span></div>`
-    ).join(""));
+    const lowCount = rec.segments.filter(isLowConf).length;
+    if (lowCount) parts.push(
+      `<div class="conf-note">⚠ ${lowCount} low-confidence segment${lowCount === 1 ? "" : "s"} highlighted — try re-transcribing with cleaning on, VAD off, or a larger model.</div>`);
+    parts.push(rec.segments.map(s => {
+      const low = isLowConf(s);
+      const tip = low ? ` title="low confidence (logprob ${s.logprob}, no-speech ${s.nsp})"` : "";
+      return `<div class="seg${low ? " lowconf" : ""}"${tip}><span class="ts">${fmtTs(s.start)}</span><span class="tx">${highlight(s.text)}</span></div>`;
+    }).join(""));
   }
   parts.push(retranscribeControl(rec));
   el.innerHTML = parts.join("");
@@ -248,6 +255,10 @@ async function loadTranscript(id, el) {
   wireRetranscribe(el, id);
 }
 
+function isLowConf(s) {
+  return s.logprob != null && (s.logprob < -1.0 || (s.nsp != null && s.nsp > 0.6));
+}
+
 function retranscribeControl(rec) {
   const curModel = rec.model || modelInfo.default_model;
   const curEngine = rec.engine || modelInfo.default_engine;
@@ -255,11 +266,15 @@ function retranscribeControl(rec) {
     `<option value="${m}" ${m === curModel ? "selected" : ""}>${m}</option>`).join("");
   const engineOpts = modelInfo.engines.map(e =>
     `<option value="${e}" ${e === curEngine ? "selected" : ""}>${e}</option>`).join("");
+  const pre = appSettings.default_preprocess ? "checked" : "";
+  const vad = appSettings.default_vad ? "checked" : "";
   return `
     <div class="retro">
       <span class="muted">Re-transcribe with</span>
       <select class="rt-model">${modelOpts}</select>
       <select class="rt-engine">${engineOpts}</select>
+      <label class="check" title="Pre-clean weak/noisy audio before transcribing"><input type="checkbox" class="rt-pre" ${pre}> Clean audio</label>
+      <label class="check" title="Voice activity detection: trims silence. Turn off to recover quiet/marginal speech."><input type="checkbox" class="rt-vad" ${vad}> VAD</label>
       <button class="btn rt-go">Re-transcribe</button>
     </div>`;
 }
@@ -271,13 +286,15 @@ function wireRetranscribe(el, id) {
     e.stopPropagation();
     const model = el.querySelector(".rt-model").value;
     const engine = el.querySelector(".rt-engine").value;
+    const preprocess = el.querySelector(".rt-pre").checked;
+    const vad = el.querySelector(".rt-vad").checked;
     btn.disabled = true;
     btn.textContent = "Queued…";
     try {
       await fetch(`/api/recordings/${id}/retranscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, engine }),
+        body: JSON.stringify({ model, engine, preprocess, vad }),
       });
       loadRecordings();
     } catch {

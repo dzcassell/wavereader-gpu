@@ -94,6 +94,9 @@ mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .
 .seg { display: flex; gap: .8rem; padding: .15rem 0; }
 .seg .ts { color: var(--accent); font-variant-numeric: tabular-nums; flex: 0 0 5.5rem; }
 .seg .tx { white-space: pre-wrap; }
+.seg.lowconf { border-left: 2px solid var(--warn); padding-left: .5rem; margin-left: -.7rem; }
+.seg.lowconf .tx { color: var(--warn); }
+.conf-note { color: var(--warn); font-size: .85rem; margin-bottom: .6rem; }
 .empty, .err-msg { color: var(--muted); padding: .5rem 0; }
 .err-msg { color: var(--err); }
 .logpanel { margin: 0 1.5rem 2rem; }

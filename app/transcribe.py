@@ -11,6 +11,9 @@ re-transcribed with a different model without disturbing the default. Each cache
 model holds VRAM until the process restarts.
 """
 import logging
+import os
+import subprocess
+import tempfile
 import threading
 import time
 from typing import Optional
@@ -18,6 +21,25 @@ from typing import Optional
 from . import config
 
 log = logging.getLogger("wavereader.transcribe")
+
+
+def _preprocess_audio(path: str) -> Optional[str]:
+    """Clean weak/noisy voice via ffmpeg into a temp 16k mono wav. Returns the
+    temp path (caller deletes it) or None if ffmpeg failed."""
+    fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="wr_pre_")
+    os.close(fd)
+    cmd = ["ffmpeg", "-nostdin", "-y", "-i", path,
+           "-ac", "1", "-ar", "16000", "-af", config.PREPROCESS_FILTERS, tmp]
+    try:
+        subprocess.run(cmd, capture_output=True, check=True, timeout=900)
+        return tmp
+    except Exception as e:
+        log.warning("preprocess failed for %s (%s); using original audio", path, e)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None
 
 # Models the UI offers for re-transcription.
 AVAILABLE_MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
@@ -107,20 +129,23 @@ def free_models() -> list[str]:
     return freed
 
 
-def _transcribe_faster_whisper(mdl, path: str):
-    vad_params = {"min_silence_duration_ms": 500} if config.VAD else None
+def _transcribe_faster_whisper(mdl, path: str, vad: bool):
+    vad_params = {"min_silence_duration_ms": 500} if vad else None
     segments_iter, info = mdl.transcribe(
         path,
         language=config.LANGUAGE or None,
         beam_size=config.BEAM_SIZE,
-        vad_filter=config.VAD,
+        vad_filter=vad,
         vad_parameters=vad_params,
         initial_prompt=config.INITIAL_PROMPT,
     )
     segments = []
     for s in segments_iter:  # generator: streaming decode
-        segments.append({"start": round(s.start, 2), "end": round(s.end, 2),
-                         "text": s.text.strip()})
+        segments.append({
+            "start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip(),
+            "logprob": round(s.avg_logprob, 3) if s.avg_logprob is not None else None,
+            "nsp": round(s.no_speech_prob, 3) if s.no_speech_prob is not None else None,
+        })
     return segments, info.duration, info.language
 
 
@@ -134,24 +159,45 @@ def _transcribe_transformers(mdl, path: str):
         end = ts[1] if ts[1] is not None else start
         duration = max(duration, end or 0.0)
         segments.append({"start": round(start, 2), "end": round(end, 2),
-                         "text": ch["text"].strip()})
+                         "text": ch["text"].strip(), "logprob": None, "nsp": None})
     if not segments:  # no chunking -> single block
-        segments = [{"start": 0.0, "end": 0.0, "text": out.get("text", "").strip()}]
+        segments = [{"start": 0.0, "end": 0.0, "text": out.get("text", "").strip(),
+                     "logprob": None, "nsp": None}]
     return segments, duration, config.LANGUAGE
 
 
-def transcribe(path: str, model: Optional[str] = None, engine: Optional[str] = None) -> dict:
-    """Transcribe one file, optionally overriding model/engine for this job.
+def transcribe(path: str, model: Optional[str] = None, engine: Optional[str] = None,
+               preprocess: Optional[bool] = None, vad: Optional[bool] = None) -> dict:
+    """Transcribe one file. model/engine/preprocess/vad override config defaults
+    for this job (None = use default).
 
-    Returns {segments, text, duration, language, model, engine}.
+    Returns {segments, text, duration, language, model, engine, preprocess, vad}.
     """
     engine = engine or config.WHISPER_ENGINE
     model = model or config.WHISPER_MODEL
-    mdl = _get_model(engine, model)
-    if engine == "faster_whisper":
-        segments, duration, language = _transcribe_faster_whisper(mdl, path)
-    else:
-        segments, duration, language = _transcribe_transformers(mdl, path)
+    do_pre = config.PREPROCESS if preprocess is None else preprocess
+    use_vad = config.VAD if vad is None else vad
+
+    src = path
+    tmp = None
+    if do_pre:
+        log.info("pre-cleaning audio: %s", os.path.basename(path))
+        tmp = _preprocess_audio(path)
+        if tmp:
+            src = tmp
+    try:
+        mdl = _get_model(engine, model)
+        if engine == "faster_whisper":
+            segments, duration, language = _transcribe_faster_whisper(mdl, src, use_vad)
+        else:
+            segments, duration, language = _transcribe_transformers(mdl, src)
+    finally:
+        if tmp:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
     text = "\n".join(s["text"] for s in segments if s["text"])
     return {
         "segments": segments,
@@ -160,4 +206,6 @@ def transcribe(path: str, model: Optional[str] = None, engine: Optional[str] = N
         "language": language,
         "model": model,
         "engine": engine,
+        "preprocess": do_pre,
+        "vad": use_vad,
     }

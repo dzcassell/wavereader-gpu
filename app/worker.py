@@ -83,14 +83,19 @@ async def worker_loop() -> None:
         path = row["path"]
         model = row["req_model"] or config.WHISPER_MODEL
         engine = row["req_engine"] or config.WHISPER_ENGINE
-        log.info("transcribing id=%s %s (engine=%s model=%s)", rec_id, row["filename"], engine, model)
+        pre = None if row["req_preprocess"] is None else bool(row["req_preprocess"])
+        vad = None if row["req_vad"] is None else bool(row["req_vad"])
+        eff_pre = config.PREPROCESS if pre is None else pre
+        eff_vad = config.VAD if vad is None else vad
+        log.info("transcribing id=%s %s (engine=%s model=%s preprocess=%s vad=%s)",
+                 rec_id, row["filename"], engine, model, eff_pre, eff_vad)
         db.set_status(rec_id, "processing")
         t0 = time.monotonic()
         try:
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
             result = await asyncio.to_thread(
-                transcribe.transcribe, path, row["req_model"], row["req_engine"])
+                transcribe.transcribe, path, row["req_model"], row["req_engine"], pre, vad)
             elapsed = time.monotonic() - t0
             dur = result["duration"] or 0
             rtf = (dur / elapsed) if elapsed > 0 else 0

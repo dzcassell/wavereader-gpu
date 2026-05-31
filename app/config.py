@@ -17,6 +17,18 @@ LANGUAGE = os.getenv("LANGUAGE", "en")
 BEAM_SIZE = int(os.getenv("BEAM_SIZE", "5"))
 VAD = os.getenv("VAD", "true").lower() in ("1", "true", "yes")
 
+# --- Audio recovery / pre-cleaning ---
+# When on, the audio is run through an ffmpeg filter chain before transcription
+# to pull speech out of weak/noisy signals. Default off so clean FM audio isn't
+# altered; toggle per-file in the UI, or flip the default here.
+PREPROCESS = os.getenv("PREPROCESS", "false").lower() in ("1", "true", "yes")
+# Tuned for comms voice: band-limit to the speech band, FFT denoise, then bring
+# up quiet passages. Override the whole chain via env if you want.
+PREPROCESS_FILTERS = os.getenv(
+    "PREPROCESS_FILTERS",
+    "highpass=f=250,lowpass=f=3000,afftdn=nf=-20,dynaudnorm=f=150:g=15",
+)
+
 # Bias the model toward amateur/CB radio vocabulary. Whisper uses this as a soft hint.
 INITIAL_PROMPT = os.getenv(
     "INITIAL_PROMPT",

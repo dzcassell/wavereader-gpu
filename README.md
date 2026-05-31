@@ -72,7 +72,9 @@ the GPU name) rather than silently falling back to CPU.
 | `COMPUTE_TYPE` | `float16` | `int8_float16` cuts VRAM (faster_whisper only) |
 | `LANGUAGE` | `en` | set empty to auto-detect |
 | `BEAM_SIZE` | `5` | lower = faster, slightly less accurate |
-| `VAD` | `true` | trims silence/dead air before decoding |
+| `VAD` | `true` | trims silence/dead air before decoding; turn off to recover quiet/marginal speech |
+| `PREPROCESS` | `false` | pre-clean weak audio (band-limit + denoise + normalize) before transcribing |
+| `PREPROCESS_FILTERS` | comms voice chain | ffmpeg `-af` chain used when `PREPROCESS` is on |
 | `INITIAL_PROMPT` | ham vocab | override to bias other vocabularies |
 | `SCAN_INTERVAL` | `30` | seconds between directory scans |
 | `STABLE_SECONDS` | `15` | file must be untouched this long before ingest |
@@ -114,6 +116,24 @@ The header has a **Free models** button that drops every cached model and releas
 VRAM in one click (the GPU chip beside it shows the memory drop). The backlog
 **progress bar** under the search box shows how much of the on-disk queue has been
 transcribed, plus what is still queued or errored.
+
+## Recovering weak audio
+
+Goal: pull as many words as possible out of marginal recordings.
+
+- **Confidence flags** — each segment carries Whisper's `avg_logprob` and
+  `no_speech_prob`. Shaky segments are highlighted amber in the transcript (hover
+  for the numbers), and a note tallies how many are low-confidence. That tells you
+  exactly which files are worth a recovery pass.
+- **Re-transcribe with recovery options** — the per-file control has two toggles:
+  - **Clean audio** — runs the recording through an ffmpeg chain
+    (`PREPROCESS_FILTERS`: speech-band bandpass + FFT denoise + dynamic normalize)
+    before transcribing. Best lever for weak/noisy SSB.
+  - **VAD** — on by default to trim dead air, but it can clip quiet speech; **turn
+    it off** to let Whisper attempt the marginal passages.
+  Combine with a larger model (e.g. `large-v3`) for the hardest files.
+- Set `PREPROCESS=true` in `.env` to clean *everything* by default, or leave it off
+  and clean only the files that need it from the UI.
 
 ## Logging
 

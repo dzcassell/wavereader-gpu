@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS settings (
 _MIGRATIONS = [
     ("req_model", "ALTER TABLE recordings ADD COLUMN req_model TEXT"),
     ("req_engine", "ALTER TABLE recordings ADD COLUMN req_engine TEXT"),
+    ("req_preprocess", "ALTER TABLE recordings ADD COLUMN req_preprocess INTEGER"),
+    ("req_vad", "ALTER TABLE recordings ADD COLUMN req_vad INTEGER"),
 ]
 
 
@@ -160,10 +162,17 @@ def counts() -> dict:
     }
 
 
-def requeue(rec_id: int, model: Optional[str] = None, engine: Optional[str] = None) -> None:
-    """Re-queue a recording. model/engine override the config defaults for this job."""
+def _b(v: Optional[bool]) -> Optional[int]:
+    return None if v is None else (1 if v else 0)
+
+
+def requeue(rec_id: int, model: Optional[str] = None, engine: Optional[str] = None,
+            preprocess: Optional[bool] = None, vad: Optional[bool] = None) -> None:
+    """Re-queue a recording. model/engine/preprocess/vad override config defaults
+    for this job (None = use default)."""
     set_status(rec_id, "pending", error=None, completed_at=None,
-               req_model=model, req_engine=engine)
+               req_model=model, req_engine=engine,
+               req_preprocess=_b(preprocess), req_vad=_b(vad))
 
 
 def delete_recording(rec_id: int) -> None:
