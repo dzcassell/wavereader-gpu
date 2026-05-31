@@ -3,6 +3,8 @@ const healthEl = document.getElementById("health");
 const gpuEl = document.getElementById("gpu");
 const open = new Set();          // ids whose transcript is expanded
 let rowCache = {};               // id -> recording summary
+const rowEls = new Map();        // id -> { row, tr }  live DOM nodes for incremental updates
+let lastOrder = "";              // last rendered id order, to skip needless reordering
 let currentQuery = "";           // active search term
 let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
 
@@ -85,17 +87,73 @@ async function loadRecordings() {
   catch { return; }
   document.getElementById("searchInfo").textContent =
     currentQuery ? `${recs.length} match${recs.length === 1 ? "" : "es"}` : "";
+
+  // Incremental reconcile: reuse existing row DOM, update only what changed, and
+  // leave already-rendered transcripts untouched unless their status changed.
   rowCache = {};
-  rowsEl.innerHTML = "";
+  const seen = new Set();
   for (const r of recs) {
     rowCache[r.id] = r;
-    rowsEl.appendChild(renderRow(r));
+    seen.add(r.id);
+    let e = rowEls.get(r.id);
+    if (!e) {
+      e = { row: renderRow(r), tr: null };
+      rowEls.set(r.id, e);
+    } else {
+      updateRow(e.row, r);
+    }
     if (open.has(r.id)) {
-      const tr = renderTranscriptRow(r.id);
-      rowsEl.appendChild(tr);
-      loadTranscript(r.id, tr.querySelector(".transcript"));
+      if (!e.tr) {
+        e.tr = renderTranscriptRow(r.id);
+        e.row.after(e.tr);
+        loadTranscript(r.id, e.tr.querySelector(".transcript"));
+        e.tr.dataset.st = r.status;
+      } else if (e.tr.dataset.st !== r.status) {
+        // status changed (e.g. pending -> done): refresh this transcript once
+        loadTranscript(r.id, e.tr.querySelector(".transcript"));
+        e.tr.dataset.st = r.status;
+      }
+    } else if (e.tr) {
+      e.tr.remove();
+      e.tr = null;
     }
   }
+
+  // Drop rows that no longer exist (e.g. deleted, or filtered out by search).
+  for (const [id, e] of rowEls) {
+    if (!seen.has(id)) {
+      e.row.remove();
+      if (e.tr) e.tr.remove();
+      rowEls.delete(id);
+    }
+  }
+
+  // Reorder/insert only when the id sequence actually changed (rare: new file or
+  // search change). This is the only branch that moves nodes, so steady-state
+  // polling never disturbs the DOM you're reading.
+  const order = recs.map(r => r.id).join(",");
+  if (order !== lastOrder) {
+    const frag = document.createDocumentFragment();
+    for (const r of recs) {
+      const e = rowEls.get(r.id);
+      frag.appendChild(e.row);
+      if (e.tr) frag.appendChild(e.tr);
+    }
+    rowsEl.appendChild(frag);
+    lastOrder = order;
+  }
+}
+
+function updateRow(row, r) {
+  row.querySelector(".caret").classList.toggle("open", open.has(r.id));
+  const badge = row.querySelector(".badge");
+  if (badge.textContent !== r.status) {
+    badge.className = `badge ${r.status}`;
+    badge.textContent = r.status;
+  }
+  const dur = fmtDur(r.duration);
+  const durCell = row.querySelector(".dur");
+  if (durCell.textContent !== dur) durCell.textContent = dur;
 }
 
 function renderRow(r) {
@@ -108,7 +166,7 @@ function renderRow(r) {
     <td>${escapeHtml(r.filename)}</td>
     <td class="muted">${r.source}</td>
     <td><span class="badge ${r.status}">${r.status}</span></td>
-    <td class="muted">${fmtDur(r.duration)}</td>
+    <td class="muted dur">${fmtDur(r.duration)}</td>
     <td><div class="actions">
       <button class="btn dl">Download</button>
       <button class="iconbtn trash" title="Delete file from disk">🗑</button>
@@ -134,8 +192,20 @@ function renderTranscriptRow(id) {
 }
 
 function toggle(id) {
-  if (open.has(id)) open.delete(id); else open.add(id);
-  loadRecordings();
+  const e = rowEls.get(id);
+  if (!e) return;
+  if (open.has(id)) {
+    open.delete(id);
+    if (e.tr) { e.tr.remove(); e.tr = null; }
+    e.row.querySelector(".caret").classList.remove("open");
+  } else {
+    open.add(id);
+    e.tr = renderTranscriptRow(id);
+    e.row.after(e.tr);
+    e.row.querySelector(".caret").classList.add("open");
+    loadTranscript(id, e.tr.querySelector(".transcript"));
+    e.tr.dataset.st = (rowCache[id] || {}).status || "";
+  }
 }
 
 async function loadTranscript(id, el) {
