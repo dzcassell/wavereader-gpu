@@ -355,6 +355,14 @@ def update_voiceprint_emb(vp_id: int, emb: bytes, dim: int) -> None:
     _exec("UPDATE voiceprints SET emb=?, dim=? WHERE id=?", (emb, dim, vp_id))
 
 
+def manual_tag_recordings() -> list[int]:
+    """Distinct recording ids that have at least one manual tag."""
+    with _lock:
+        rows = _conn.execute(
+            "SELECT DISTINCT recording_id FROM segment_tags WHERE source='manual'").fetchall()
+    return [r["recording_id"] for r in rows]
+
+
 def set_profile(speaker_id: int, emb: bytes, dim: int, n: int) -> None:
     _exec("INSERT INTO speaker_profiles (speaker_id, dim, emb, n, updated_at) "
           "VALUES (?, ?, ?, ?, ?) "

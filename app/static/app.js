@@ -802,6 +802,18 @@ document.getElementById("buildProfiles").addEventListener("click", async (e) => 
   finally { e.target.disabled = false; }
 });
 
+document.getElementById("enrollTags").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  document.getElementById("spkInfo").textContent = "enrolling tagged segments…";
+  try {
+    const d = await (await fetch("/api/voiceprints/enroll-tags", { method: "POST" })).json();
+    document.getElementById("spkInfo").textContent =
+      `enrolled ${d.enrolled} voiceprint(s) (short ${d.skipped_short}, low-q ${d.skipped_lowq}, failed ${d.failed})`;
+    loadSpeakers();
+  } catch { document.getElementById("spkInfo").textContent = "enroll failed"; }
+  finally { e.target.disabled = false; }
+});
+
 document.getElementById("rebuildPrints").addEventListener("click", async (e) => {
   if (!confirm("Re-embed all voiceprints from source audio with the current pipeline? Recommended after changing clean-audio settings.")) return;
   e.target.disabled = true;

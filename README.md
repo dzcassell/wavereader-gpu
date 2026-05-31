@@ -100,6 +100,7 @@ the GPU name) rather than silently falling back to CPU.
 | POST | `/api/recordings/{id}/identify` | auto-tag voices in one file (`?threshold=`) |
 | POST | `/api/identify` | background scan + auto-tag across files (`?threshold=&only_new=`) |
 | POST | `/api/voiceprints/rebuild` | re-embed all voiceprints from source with the current pipeline |
+| POST | `/api/voiceprints/enroll-tags` | build voiceprints for manually-tagged segments that lack one |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
 | GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |

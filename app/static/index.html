@@ -64,6 +64,7 @@
         <input type="number" id="spkThreshold" min="0" max="1" step="0.05" value="0.45" class="tag-spk" style="width:4.5rem">
       </label>
       <button id="buildProfiles" class="chipbtn" title="Recompute every speaker's profile from its voiceprints">Build profiles</button>
+      <button id="enrollTags" class="chipbtn" title="Create voiceprints for all manually-tagged segments that don't have one yet">Enroll tagged</button>
       <button id="rebuildPrints" class="chipbtn" title="Re-embed all voiceprints from source audio with the current clean-audio pipeline (run after a pipeline change)">Rebuild voiceprints</button>
       <label class="check"><input type="checkbox" id="idOnlyNew" checked> only un-scanned files</label>
       <button id="scanIdentify" class="chipbtn" title="Scan transcribed files and auto-tag recognized voices">Scan &amp; auto-tag</button>

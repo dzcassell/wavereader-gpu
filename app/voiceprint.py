@@ -64,13 +64,17 @@ def _clip(path: str, start: float, end: float) -> str:
 
 def embed(path: str, start: float, end: float) -> np.ndarray:
     """Return a normalized float32 voiceprint for the given time range."""
-    import torch  # noqa
-    import torchaudio
+    import soundfile as sf
+    import torch
     log.debug("embed: %s [%.2f-%.2f] dur=%.2fs preprocess=%s",
               os.path.basename(path), start, end, end - start, config.SPK_PREPROCESS)
     tmp = _clip(path, start, end)
     try:
-        signal, _sr = torchaudio.load(tmp)
+        # Read with soundfile (libsndfile) — avoids torchaudio's TorchCodec backend.
+        sig, _sr = sf.read(tmp, dtype="float32")
+        if sig.ndim > 1:                       # safety; clips are forced mono
+            sig = sig.mean(axis=1)
+        signal = torch.from_numpy(np.ascontiguousarray(sig)).unsqueeze(0)  # [1, T]
         emb = _load().encode_batch(signal).squeeze().detach().cpu().numpy().astype("float32")
         norm = float(np.linalg.norm(emb))
         log.debug("embed: ok, dim=%d norm=%.3f", emb.shape[0], norm)

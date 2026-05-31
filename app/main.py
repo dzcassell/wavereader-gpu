@@ -464,6 +464,53 @@ async def rebuild_voiceprints():
     return {"rebuilt": done, "failed": failed}
 
 
+@app.post("/api/voiceprints/enroll-tags")
+async def enroll_tags():
+    """Create voiceprints for every manually-tagged segment that doesn't have one yet
+    (e.g. tags made before enrollment worked). Idempotent."""
+    rec_ids = db.manual_tag_recordings()
+    log.info("enroll-from-tags: %d recording(s) with manual tags", len(rec_ids))
+
+    def work():
+        enrolled, short, lowq, failed = 0, 0, 0, 0
+        speakers_touched = set()
+        for rid in rec_ids:
+            rec = db.get_recording(rid)
+            if not rec or not os.path.exists(rec["path"]):
+                continue
+            segs = rec.get("segments") or []
+            tags = db.get_segment_tags(rid)
+            for seg_i, t in tags.items():
+                if t["source"] != "manual" or seg_i >= len(segs):
+                    continue
+                s = segs[seg_i]
+                start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
+                if end - start < config.MIN_ENROLL_SEC:
+                    short += 1
+                    continue
+                lp = s.get("logprob")
+                if lp is not None and lp < config.SPK_ENROLL_MIN_LOGPROB:
+                    lowq += 1
+                    continue
+                try:
+                    emb = voiceprint.embed(rec["path"], start, end)
+                    db.add_voiceprint(t["speaker_id"], rid, seg_i, start, end,
+                                      emb.tobytes(), int(emb.shape[0]))
+                    enrolled += 1
+                    speakers_touched.add(t["speaker_id"])
+                except Exception as e:
+                    failed += 1
+                    log.warning("enroll-from-tags embed FAILED rec=%s seg=%s: %s", rid, seg_i, e)
+        for sid in speakers_touched:
+            _build_profile(sid)
+        return enrolled, short, lowq, failed
+
+    enrolled, short, lowq, failed = await asyncio.to_thread(work)
+    log.info("enroll-from-tags complete: enrolled=%d (short=%d low-quality=%d failed=%d)",
+             enrolled, short, lowq, failed)
+    return {"enrolled": enrolled, "skipped_short": short, "skipped_lowq": lowq, "failed": failed}
+
+
 @app.get("/api/recordings/{rec_id}")
 async def recording(rec_id: int):
     rec = db.get_recording(rec_id)
