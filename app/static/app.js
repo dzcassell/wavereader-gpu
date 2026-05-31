@@ -7,6 +7,8 @@ const rowEls = new Map();        // id -> { row, tr }  live DOM nodes for increm
 let lastOrder = "";              // last rendered id order, to skip needless reordering
 let currentQuery = "";           // active search term
 let alertsOnly = false;          // filter: only recordings that hit a watch term
+let activeTab = "transcribed";   // "transcribed" (done) | "pending" (everything else)
+let allRecs = [];                // last full list from the server, before tab filtering
 const pendingSeek = {};          // id -> seconds to seek once its player is wired
 let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
 let appSettings = { default_preprocess: false, default_vad: true };
@@ -86,16 +88,34 @@ async function loadGpu() {
 }
 
 async function loadRecordings() {
-  let recs;
   const params = new URLSearchParams();
   if (currentQuery) params.set("q", currentQuery);
   if (alertsOnly) params.set("alerts_only", "true");
   const qs = params.toString();
-  try { recs = await (await fetch("/api/recordings" + (qs ? "?" + qs : ""))).json(); }
+  try { allRecs = await (await fetch("/api/recordings" + (qs ? "?" + qs : ""))).json(); }
   catch { return; }
   document.getElementById("searchInfo").textContent =
-    currentQuery ? `${recs.length} match${recs.length === 1 ? "" : "es"}` : "";
+    currentQuery ? `${allRecs.length} match${allRecs.length === 1 ? "" : "es"}` : "";
+  renderTabs();
+}
 
+function tabRecs() {
+  return allRecs.filter(r => activeTab === "transcribed" ? r.status === "done" : r.status !== "done");
+}
+
+function renderTabs() {
+  const done = allRecs.filter(r => r.status === "done").length;
+  const pend = allRecs.length - done;
+  const tt = document.getElementById("tabTranscribed");
+  const tp = document.getElementById("tabPending");
+  if (tt) tt.textContent = `Transcribed (${done})`;
+  if (tp) tp.textContent = `Pending (${pend})`;
+  if (tt) tt.classList.toggle("active", activeTab === "transcribed");
+  if (tp) tp.classList.toggle("active", activeTab === "pending");
+  renderList(tabRecs());
+}
+
+function renderList(recs) {
   // Incremental reconcile: reuse existing row DOM, update only what changed, and
   // leave already-rendered transcripts untouched unless their status changed.
   rowCache = {};
@@ -368,6 +388,13 @@ function wirePlayerAndSelection(el, id, rec) {
     se.querySelector(".seg-sel").addEventListener("change", updateSelbar);
   });
 
+  // Only one clip plays at a time: starting this one pauses every other player.
+  player.addEventListener("play", () => {
+    document.querySelectorAll("audio.player").forEach(a => { if (a !== player) a.pause(); });
+  });
+  // When paused (including by another starting), drop the karaoke highlight.
+  player.addEventListener("pause", () => segEls.forEach(se => se.classList.remove("playing")));
+
   // Karaoke highlight + advance through a selection-play queue.
   player.addEventListener("timeupdate", () => {
     const t = player.currentTime;
@@ -474,8 +501,9 @@ function wirePlayerAndSelection(el, id, rec) {
 
 async function openAndPlay(id, start) {
   if (!rowEls.has(id)) {
-    // Row may be hidden by an active filter — clear filters so it exists, then retry.
-    currentQuery = ""; alertsOnly = false;
+    // Row may be hidden by a filter or the other tab — clear filters, switch to the
+    // Transcribed tab (jump targets always have transcripts), then retry.
+    currentQuery = ""; alertsOnly = false; activeTab = "transcribed";
     const search = document.getElementById("search");
     if (search) search.value = "";
     document.getElementById("alertsOnly").checked = false;
@@ -624,6 +652,12 @@ document.getElementById("alertsOnly").addEventListener("change", (e) => {
   alertsOnly = e.target.checked;
   loadRecordings();
 });
+
+// ---- Tabs (Transcribed / Pending) ----
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  activeTab = t.dataset.tab;
+  renderTabs();   // re-render from the already-fetched list, no refetch
+}));
 
 // ---- Heard & alerts panel ----
 const heardBtn = document.getElementById("heardBtn");

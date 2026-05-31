@@ -55,6 +55,14 @@ h1 { font-size: 1.25rem; margin: 0; }
   border: 1px solid var(--border); border-radius: 8px; padding: .55rem .8rem; font-size: .95rem;
 }
 .searchbar input:focus { outline: none; border-color: var(--accent); }
+.tabs { display: flex; gap: .3rem; margin: 0 1.5rem .2rem; }
+.tab {
+  background: none; color: var(--muted); border: 1px solid transparent;
+  border-bottom: 2px solid transparent; cursor: pointer;
+  padding: .5rem .9rem; font-size: .9rem; border-radius: 6px 6px 0 0;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
 table { width: calc(100% - 3rem); margin: 0 1.5rem 2rem; border-collapse: collapse; }
 th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
