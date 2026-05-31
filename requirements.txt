@@ -12,3 +12,7 @@ transformers==4.48.0
 accelerate==1.2.1
 soundfile==0.13.0
 librosa==0.10.2.post1
+
+# Speaker identification (voiceprints). torchaudio is installed alongside torch
+# from the CUDA 12.8 index in the Dockerfile so it matches the Blackwell build.
+speechbrain==1.0.2

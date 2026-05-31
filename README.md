@@ -92,6 +92,10 @@ the GPU name) rather than silently falling back to CPU.
 | GET | `/api/search?q=` | cross-file segment hits with timestamps for jump-to-play |
 | GET / POST | `/api/watch` | get/set keyword & callsign watch terms |
 | POST | `/api/reindex` | recompute entities + alerts for all transcripts (backfill) |
+| GET / POST | `/api/speakers` | list / create named speakers (voices) |
+| DELETE | `/api/speakers/{id}` | delete a speaker and its voiceprints/tags |
+| POST | `/api/recordings/{id}/tag` | tag segments with a speaker (enrolls voiceprints); body `{segments:[i], speaker_id\|name}` |
+| POST | `/api/recordings/{id}/untag` | remove speaker tags from segments |
 | GET | `/api/recordings/{id}` | one recording with transcript segments |
 | GET | `/api/recordings/{id}/download` | download original audio |
 | GET | `/api/recordings/{id}/audio` | stream audio inline (Range-enabled) for the in-page player |
@@ -122,6 +126,26 @@ The header has a **Free models** button that drops every cached model and releas
 VRAM in one click (the GPU chip beside it shows the memory drop). The backlog
 **progress bar** under the search box shows how much of the on-disk queue has been
 transcribed, plus what is still queued or errored.
+
+## Speaker tagging (voices)
+
+Identify and label *who* is speaking, building a per-voice library over time.
+
+- In a finished transcript, **check the segments** where you recognize a voice, pick
+  or create a name in **"Tag as…"**, and tag them. The chosen segments get a speaker
+  label, and each one long enough (≥ `MIN_ENROLL_SEC`, default 1.5 s) enrolls a
+  **voiceprint** (SpeechBrain ECAPA-TDNN embedding) for that speaker.
+- The **Speakers** panel (header button) lists every named voice with how many
+  voiceprints/tags it has; delete removes the voice and its data.
+- Remove a label with the **×** on a segment's speaker chip.
+
+This is **Phase 1 (manual enrollment)**. Phase 2 will use the accumulated voiceprints
+to **auto-identify** speakers on new transcripts with a confidence score, improving as
+you tag/correct. The per-speaker clips this produces are also the labeled dataset you'd
+later feed a voice-cloning / TTS model.
+
+> Speaker-ID adds `torchaudio` + `speechbrain`; the ECAPA model (~80 MB) downloads to
+> the model-cache volume on first tag.
 
 ## Find & monitor
 

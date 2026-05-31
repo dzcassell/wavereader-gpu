@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from . import config, db, entities, gpu, logging_setup, transcribe, worker
+from . import config, db, entities, gpu, logging_setup, transcribe, voiceprint, worker
 
 log = logging.getLogger("wavereader.api")
 
@@ -39,6 +39,20 @@ class ClipReq(BaseModel):
 
 class WatchReq(BaseModel):
     terms: list[str]
+
+
+class SpeakerReq(BaseModel):
+    name: str
+
+
+class TagReq(BaseModel):
+    segments: list[int]
+    speaker_id: int | None = None
+    name: str | None = None
+
+
+class UntagReq(BaseModel):
+    segments: list[int]
 
 _GPU_STATUS = "not loaded"
 
@@ -196,6 +210,84 @@ async def reindex():
     count = await asyncio.to_thread(run)
     log.info("reindex complete: %d recordings", count)
     return {"reindexed": count}
+
+
+# --- Speakers / voice tagging (Phase 1: manual enrollment) ---
+
+@app.get("/api/speakers")
+async def speakers():
+    return {"speakers": db.list_speakers()}
+
+
+@app.post("/api/speakers")
+async def add_speaker(req: SpeakerReq):
+    if not req.name.strip():
+        raise HTTPException(400, "name required")
+    sid = db.create_speaker(req.name)
+    return {"id": sid, "name": req.name.strip()}
+
+
+@app.delete("/api/speakers/{speaker_id}")
+async def remove_speaker(speaker_id: int):
+    db.delete_speaker(speaker_id)
+    log.info("deleted speaker id=%s", speaker_id)
+    return {"deleted": True}
+
+
+@app.post("/api/recordings/{rec_id}/tag")
+async def tag(rec_id: int, req: TagReq):
+    rec = db.get_recording(rec_id)
+    if not rec:
+        raise HTTPException(404, "not found")
+    segs = rec.get("segments") or []
+    if not segs:
+        raise HTTPException(400, "recording has no segments")
+    if req.speaker_id:
+        sid = req.speaker_id
+        name = db.speaker_name(sid)
+        if not name:
+            raise HTTPException(404, "speaker not found")
+    elif req.name and req.name.strip():
+        sid = db.create_speaker(req.name)
+        name = req.name.strip()
+    else:
+        raise HTTPException(400, "speaker_id or name required")
+
+    path = rec["path"]
+    can_embed = os.path.exists(path)
+
+    def work():
+        enrolled, short = 0, 0
+        for i in req.segments:
+            if i < 0 or i >= len(segs):
+                continue
+            s = segs[i]
+            start, end = s.get("start", 0) or 0, s.get("end", 0) or 0
+            db.set_segment_tag(rec_id, i, sid, "manual", None)
+            if can_embed and (end - start) >= config.MIN_ENROLL_SEC:
+                try:
+                    emb = voiceprint.embed(path, start, end)
+                    db.add_voiceprint(sid, rec_id, i, start, end, emb.tobytes(), int(emb.shape[0]))
+                    enrolled += 1
+                except Exception as e:
+                    log.warning("embed failed rec=%s seg=%s: %s", rec_id, i, e)
+            elif end - start < config.MIN_ENROLL_SEC:
+                short += 1
+        return enrolled, short
+
+    enrolled, short = await asyncio.to_thread(work)
+    log.info("tagged rec=%s speaker=%s segs=%d enrolled=%d (skipped %d too-short)",
+             rec_id, name, len(req.segments), enrolled, short)
+    return {"speaker_id": sid, "name": name, "tagged": len(req.segments),
+            "enrolled": enrolled, "skipped_short": short}
+
+
+@app.post("/api/recordings/{rec_id}/untag")
+async def untag(rec_id: int, req: UntagReq):
+    for i in req.segments:
+        db.remove_segment_tag(rec_id, i)
+        db.remove_voiceprint(rec_id, i)
+    return {"untagged": len(req.segments)}
 
 
 @app.get("/api/recordings/{rec_id}")

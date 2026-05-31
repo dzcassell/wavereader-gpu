@@ -38,6 +38,34 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS speakers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voiceprints (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    speaker_id   INTEGER NOT NULL,
+    recording_id INTEGER NOT NULL,
+    seg_index    INTEGER NOT NULL,
+    start        REAL,
+    end          REAL,
+    dim          INTEGER NOT NULL,
+    emb          BLOB NOT NULL,
+    created_at   REAL NOT NULL,
+    UNIQUE(recording_id, seg_index)
+);
+
+CREATE TABLE IF NOT EXISTS segment_tags (
+    recording_id INTEGER NOT NULL,
+    seg_index    INTEGER NOT NULL,
+    speaker_id   INTEGER NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'manual',  -- manual | auto
+    confidence   REAL,
+    PRIMARY KEY (recording_id, seg_index)
+);
 """
 
 # Columns added after initial release; ALTER on existing databases.
@@ -203,6 +231,14 @@ def get_recording(rec_id: int) -> Optional[dict]:
     d["segments"] = json.loads(d.pop("segments_json") or "[]")
     d["entities"] = json.loads(d.pop("entities_json", None) or "[]")
     d["alerts"] = json.loads(d["alerts"]) if d.get("alerts") else []
+    tags = get_segment_tags(rec_id)
+    for i, seg in enumerate(d["segments"]):
+        t = tags.get(i)
+        if t:
+            seg["speaker_id"] = t["speaker_id"]
+            seg["speaker"] = t["speaker"]
+            seg["speaker_source"] = t["source"]
+            seg["speaker_conf"] = t["confidence"]
     return d
 
 
@@ -244,6 +280,81 @@ def requeue_stuck() -> int:
     back to 'pending'. Safe to call at startup before the worker runs. Returns count."""
     cur = _exec("UPDATE recordings SET status='pending', error=NULL WHERE status='processing'")
     return cur.rowcount
+
+
+# --- Speakers / voiceprints / tags ---
+
+def create_speaker(name: str) -> int:
+    name = name.strip()
+    with _lock:
+        row = _conn.execute("SELECT id FROM speakers WHERE name=?", (name,)).fetchone()
+        if row:
+            return row["id"]
+        cur = _conn.execute("INSERT INTO speakers (name, created_at) VALUES (?, ?)",
+                            (name, time.time()))
+        _conn.commit()
+        return cur.lastrowid
+
+
+def list_speakers() -> list[dict]:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT s.id, s.name, "
+            "(SELECT COUNT(*) FROM voiceprints v WHERE v.speaker_id=s.id) AS prints, "
+            "(SELECT COUNT(*) FROM segment_tags t WHERE t.speaker_id=s.id) AS tags "
+            "FROM speakers s ORDER BY s.name"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def speaker_name(speaker_id: int) -> Optional[str]:
+    with _lock:
+        row = _conn.execute("SELECT name FROM speakers WHERE id=?", (speaker_id,)).fetchone()
+    return row["name"] if row else None
+
+
+def delete_speaker(speaker_id: int) -> None:
+    _exec("DELETE FROM voiceprints WHERE speaker_id=?", (speaker_id,))
+    _exec("DELETE FROM segment_tags WHERE speaker_id=?", (speaker_id,))
+    _exec("DELETE FROM speakers WHERE id=?", (speaker_id,))
+
+
+def add_voiceprint(speaker_id: int, rec_id: int, seg: int, start: float, end: float,
+                   emb: bytes, dim: int) -> None:
+    _exec("INSERT INTO voiceprints (speaker_id, recording_id, seg_index, start, end, dim, emb, created_at) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+          "ON CONFLICT(recording_id, seg_index) DO UPDATE SET "
+          "speaker_id=excluded.speaker_id, start=excluded.start, end=excluded.end, "
+          "dim=excluded.dim, emb=excluded.emb, created_at=excluded.created_at",
+          (speaker_id, rec_id, seg, start, end, dim, emb, time.time()))
+
+
+def remove_voiceprint(rec_id: int, seg: int) -> None:
+    _exec("DELETE FROM voiceprints WHERE recording_id=? AND seg_index=?", (rec_id, seg))
+
+
+def set_segment_tag(rec_id: int, seg: int, speaker_id: int,
+                    source: str = "manual", confidence: Optional[float] = None) -> None:
+    _exec("INSERT INTO segment_tags (recording_id, seg_index, speaker_id, source, confidence) "
+          "VALUES (?, ?, ?, ?, ?) "
+          "ON CONFLICT(recording_id, seg_index) DO UPDATE SET "
+          "speaker_id=excluded.speaker_id, source=excluded.source, confidence=excluded.confidence",
+          (rec_id, seg, speaker_id, source, confidence))
+
+
+def remove_segment_tag(rec_id: int, seg: int) -> None:
+    _exec("DELETE FROM segment_tags WHERE recording_id=? AND seg_index=?", (rec_id, seg))
+
+
+def get_segment_tags(rec_id: int) -> dict:
+    with _lock:
+        rows = _conn.execute(
+            "SELECT t.seg_index, t.speaker_id, t.source, t.confidence, s.name "
+            "FROM segment_tags t JOIN speakers s ON s.id=t.speaker_id WHERE t.recording_id=?",
+            (rec_id,)
+        ).fetchall()
+    return {r["seg_index"]: {"speaker_id": r["speaker_id"], "speaker": r["name"],
+                             "source": r["source"], "confidence": r["confidence"]} for r in rows}
 
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:

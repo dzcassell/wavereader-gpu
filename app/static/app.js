@@ -10,6 +10,7 @@ let alertsOnly = false;          // filter: only recordings that hit a watch ter
 const pendingSeek = {};          // id -> seconds to seek once its player is wired
 let modelInfo = { models: [], engines: [], default_model: "", default_engine: "" };
 let appSettings = { default_preprocess: false, default_vad: true };
+let speakers = [];               // [{id, name, prints, tags}]
 
 function fmtDur(s) {
   if (!s && s !== 0) return "—";
@@ -253,6 +254,8 @@ async function loadTranscript(id, el) {
       `<div class="conf-note">⚠ ${lowCount} low-confidence segment${lowCount === 1 ? "" : "s"} highlighted — try re-transcribing with cleaning on, VAD off, or a larger model.</div>`);
     parts.push(`<div class="selbar" hidden>
       <span class="selinfo"></span>
+      <select class="tag-spk"></select>
+      <button class="btn sel-tag">Tag as…</button>
       <button class="btn sel-play">▶ Play selection</button>
       <button class="btn sel-wav">Export .wav</button>
       <button class="btn sel-copy">Copy</button>
@@ -262,9 +265,11 @@ async function loadTranscript(id, el) {
     parts.push(rec.segments.map((s, i) => {
       const low = isLowConf(s);
       const tip = low ? ` title="low confidence (logprob ${s.logprob}, no-speech ${s.nsp})"` : "";
+      const spk = s.speaker ? speakerChip(s, i) : "";
       return `<div class="seg${low ? " lowconf" : ""}" data-i="${i}" data-start="${s.start}" data-end="${s.end}"${tip}>` +
         `<input type="checkbox" class="seg-sel">` +
         `<span class="ts" role="button">${fmtTs(s.start)}</span>` +
+        spk +
         `<span class="tx">${highlight(s.text)}</span></div>`;
     }).join(""));
   }
@@ -297,6 +302,20 @@ function entityChips(entities) {
   return `<div class="entities">${chips}</div>`;
 }
 
+function speakerChip(s, i) {
+  const auto = s.speaker_source === "auto";
+  const conf = (auto && s.speaker_conf != null) ? ` ${Math.round(s.speaker_conf * 100)}%` : "";
+  const title = auto ? `auto-identified${conf}` : "tagged";
+  return `<span class="spk${auto ? " auto" : ""}" title="${title}">${escapeHtml(s.speaker)}${conf}` +
+    `<button class="spk-x" data-i="${i}" title="remove tag">×</button></span>`;
+}
+
+function speakerOptions(selectedId) {
+  const opts = speakers.map(sp =>
+    `<option value="${sp.id}" ${sp.id === selectedId ? "selected" : ""}>${escapeHtml(sp.name)}</option>`).join("");
+  return opts + `<option value="__new__">+ new speaker…</option>`;
+}
+
 function seekTo(player, s) {
   const go = () => { try { player.currentTime = s; } catch (_) {} player.play(); };
   if (player.readyState >= 1) go();
@@ -312,6 +331,18 @@ function wirePlayerAndSelection(el, id, rec) {
 
   el.querySelectorAll(".chip").forEach(c =>
     c.addEventListener("click", () => { clipQueue = null; seekTo(player, parseFloat(c.dataset.start)); }));
+
+  // Speaker tagging
+  const tagSel = el.querySelector(".tag-spk");
+  if (tagSel) tagSel.innerHTML = speakerOptions();
+  el.querySelectorAll(".spk-x").forEach(b => b.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    await fetch(`/api/recordings/${id}/untag`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segments: [+b.dataset.i] }),
+    });
+    loadTranscript(id, el);
+  }));
 
   const checked = () => segEls.filter(se => se.querySelector(".seg-sel").checked);
   const rangesOf = (els) => els
@@ -362,6 +393,38 @@ function wirePlayerAndSelection(el, id, rec) {
   el.querySelector(".sel-clear").addEventListener("click", () => {
     segEls.forEach(se => (se.querySelector(".seg-sel").checked = false));
     updateSelbar();
+  });
+  el.querySelector(".sel-tag").addEventListener("click", async (ev) => {
+    const ids = checked().map(se => +se.dataset.i);
+    if (!ids.length) return;
+    const v = el.querySelector(".tag-spk").value;
+    let body;
+    if (v === "__new__") {
+      const name = prompt("Name this voice:");
+      if (!name || !name.trim()) return;
+      body = { segments: ids, name: name.trim() };
+    } else {
+      body = { segments: ids, speaker_id: +v };
+    }
+    ev.target.disabled = true;
+    ev.target.textContent = "Tagging…";
+    try {
+      const res = await fetch(`/api/recordings/${id}/tag`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error();
+      const r = await res.json();
+      await loadSpeakers();          // refresh roster (may have a new name)
+      loadTranscript(id, el);        // re-render with labels
+      if (r.skipped_short) {
+        // brief heads-up that some clips were too short to enroll a voiceprint
+        console.info(`${r.skipped_short} segment(s) too short to enroll`);
+      }
+    } catch {
+      ev.target.disabled = false;
+      ev.target.textContent = "Tag failed — retry";
+    }
   });
   el.querySelector(".sel-play").addEventListener("click", () => {
     const r = rangesOf(checked());
@@ -626,6 +689,35 @@ document.getElementById("reindexBtn").addEventListener("click", async (e) => {
   finally { e.target.disabled = false; }
 });
 
+// ---- Speakers panel ----
+const speakersBtn = document.getElementById("speakersBtn");
+const speakersPanel = document.getElementById("speakerspanel");
+const speakerList = document.getElementById("speakerList");
+
+speakersBtn.addEventListener("click", () => {
+  speakersPanel.hidden = !speakersPanel.hidden;
+  if (!speakersPanel.hidden) loadSpeakers();
+});
+
+async function loadSpeakers() {
+  try { speakers = (await (await fetch("/api/speakers")).json()).speakers || []; }
+  catch { return; }
+  if (speakersPanel.hidden) return;
+  if (!speakers.length) {
+    speakerList.innerHTML = `<span class="muted">No speakers yet. In a transcript, check segments where you recognize a voice and use "Tag as… → + new speaker".</span>`;
+    return;
+  }
+  speakerList.innerHTML = speakers.map(sp =>
+    `<div class="sp-row"><span class="sp-name">${escapeHtml(sp.name)}</span>` +
+    `<span class="sp-meta">${sp.prints} voiceprint${sp.prints === 1 ? "" : "s"} · ${sp.tags} tagged</span>` +
+    `<button class="chipbtn sp-del" data-id="${sp.id}">Delete</button></div>`).join("");
+  speakerList.querySelectorAll(".sp-del").forEach(b => b.addEventListener("click", async () => {
+    if (!confirm("Delete this speaker and all its voiceprints/tags?")) return;
+    await fetch(`/api/speakers/${b.dataset.id}`, { method: "DELETE" });
+    loadSpeakers();
+  }));
+}
+
 // ---- Free models ----
 const freeBtn = document.getElementById("freeBtn");
 freeBtn.addEventListener("click", async () => {
@@ -686,6 +778,7 @@ async function loadLogs() {
 
 loadModels();
 loadSettings();
+loadSpeakers();
 loadHealth();
 loadGpu();
 loadRecordings();

@@ -16,7 +16,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install PyTorch from the CUDA 12.8 index first so it carries sm_120 kernels.
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu128
+    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt

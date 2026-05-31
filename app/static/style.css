@@ -122,6 +122,24 @@ mark { background: var(--warn); color: #11141a; border-radius: 2px; padding: 0 .
 .chip.ent-frequency { border-color: #b08cff; color: #b08cff; }
 .alert-badge { margin-left: .4rem; }
 
+/* Speaker labels on segments */
+.spk {
+  flex: 0 0 auto; align-self: baseline; display: inline-flex; align-items: center; gap: .2rem;
+  background: #2a2233; border: 1px solid #b08cff; color: #cbb6ff;
+  border-radius: 999px; padding: 0 .2rem 0 .55rem; font-size: .75rem; white-space: nowrap;
+}
+.spk.auto { border-style: dashed; }
+.spk-x { background: none; border: none; color: inherit; cursor: pointer; font-size: .9rem; line-height: 1; padding: 0 .2rem; }
+.spk-x:hover { color: var(--err); }
+.tag-spk {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: .2rem .35rem; font-size: .82rem;
+}
+.sp-row { display: flex; align-items: center; gap: .6rem; padding: .3rem .4rem; border-radius: 6px; }
+.sp-row:hover { background: #1d2129; }
+.sp-name { font-weight: 600; }
+.sp-meta { color: var(--muted); font-size: .8rem; margin-right: auto; }
+
 /* Heard & alerts panel */
 .heardpanel { margin: 0 1.5rem 1rem; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 1rem; }
 .heardcols { display: flex; gap: 1.5rem; flex-wrap: wrap; }

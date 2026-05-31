@@ -46,6 +46,12 @@ AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg"}
 # Optional: POST {id, file, matched} here when a transcript hits a watch term.
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 
+# --- Speaker identification (voiceprints) ---
+# SpeechBrain ECAPA-TDNN embedding model; downloaded to the model-cache volume.
+SPK_MODEL = os.getenv("SPK_MODEL", "speechbrain/spkrec-ecapa-voxceleb")
+# A segment must be at least this long (seconds) to enroll a usable voiceprint.
+MIN_ENROLL_SEC = float(os.getenv("MIN_ENROLL_SEC", "1.5"))
+
 # --- Logging ---
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()       # DEBUG|INFO|WARNING|ERROR
 LOG_DIR = os.getenv("LOG_DIR", "/data/logs")

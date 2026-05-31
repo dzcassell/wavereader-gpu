@@ -11,6 +11,7 @@
     <h1>📻 wavereader-gpu</h1>
     <span id="gpu" class="health" title="GPU telemetry">GPU …</span>
     <button id="heardBtn" class="chipbtn" title="Callsigns / Q-codes / frequencies heard, and watch terms">Heard &amp; alerts</button>
+    <button id="speakersBtn" class="chipbtn" title="Named voices you've tagged">Speakers</button>
     <button id="freeBtn" class="chipbtn" title="Release all cached models from VRAM">Free models</button>
     <span id="health" class="health" title="transcription engine status">…</span>
   </header>
@@ -53,6 +54,12 @@
         </div>
       </div>
     </div>
+  </section>
+
+  <section class="heardpanel" id="speakerspanel" hidden>
+    <div class="heard-head"><strong>Speakers</strong>
+      <span class="muted">tag voices in a transcript (check segments → "Tag as…") to enroll them here</span></div>
+    <div id="speakerList" class="entlist"></div>
   </section>
 
   <div class="searchbar">
